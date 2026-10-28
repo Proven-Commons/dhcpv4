@@ -1,0 +1,16 @@
+name = "dhcpv4"
+version = "0.1.0"
+defaultTargets = ["Dhcp", "Proofs", "dhcpv4"]
+
+[[lean_lib]]
+name = "Dhcp"
+
+[[lean_lib]]
+name = "Proofs"
+
+[[lean_lib]]
+name = "Spec"
+
+[[lean_exe]]
+name = "dhcpv4"
+root = "Main"
