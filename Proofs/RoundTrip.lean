@@ -7,12 +7,13 @@
   - `parse_print`: for every well formed message, parsing its
     printed form gives the message back.
   - `print_parse`: for every byte list the parser takes,
-    printing the parsed message gives the canonical form of
-    the input: the first 240 bytes as they stood (the fixed
-    fields and the cookie stand unchanged under printing),
-    then the options with pad bytes dropped and exactly one
-    end byte. `canonOptions`, in `Spec/Defs.lean`, spells
-    that canonical option area out as a function.
+    the bytes after the first 240 are an option area the
+    grammar `OptionArea` (in `Spec/Defs.lean`) derives,
+    carrying the options read, and printing the parsed
+    message gives the canonical form of the input: the first
+    240 bytes as they stood (the fixed fields and the cookie
+    stand unchanged under printing), then those options
+    printed, with no pad bytes and exactly one end byte.
   - `parse_wf`: every message the parser takes is well
     formed, in the sense of `WF`.
 
@@ -21,8 +22,8 @@
   the bytes they were read from; the readers invert on
   printed forms and on read forms; the fixed fields invert
   both ways; the option reader inverts on printed options;
-  and the canonical form lemma ties a read option area to the
-  printed options of the value it read to. For soundness, the
+  and every option area the reader takes is one the grammar
+  derives, with the options it read. For soundness, the
   read fixed fields, each option read, and the option 53 check
   each give their part of `WF`.
 -/
@@ -506,43 +507,13 @@ theorem parseOptions_printOptions {os : List DhcpOption}
     (printOptions os) = some os
   exact parseOptionsGo_printOptions os _ hw (Nat.lt_succ_self _)
 
-/-- One step of the canonical form on a byte and what
-    follows it, stated for rewriting. -/
-theorem canonOptionsGo_step (fuel : Nat) (b : UInt8)
-    (rest : List UInt8) :
-    canonOptionsGo (fuel + 1) (b :: rest) =
-      if b = 0 then canonOptionsGo fuel rest
-      else if b = 255 then [255]
-      else
-        match rest with
-        | [] => [255]
-        | len :: rest' => b :: len :: (rest'.take len.toNat) ++
-            canonOptionsGo fuel (rest'.drop len.toNat) := rfl
-
-/-- One step of the canonical form on a code byte, a length
-    byte, and what follows them, stated for rewriting. -/
-theorem canonOptionsGo_step_cons (fuel : Nat) (b len : UInt8)
-    (rest' : List UInt8) :
-    canonOptionsGo (fuel + 1) (b :: len :: rest') =
-      if b = 0 then canonOptionsGo fuel (len :: rest')
-      else if b = 255 then [255]
-      else b :: len :: (rest'.take len.toNat) ++
-        canonOptionsGo fuel (rest'.drop len.toNat) := rfl
-
-/-- One step of the canonical form on a lone byte, stated
-    for rewriting. -/
-theorem canonOptionsGo_step_single (fuel : Nat) (b : UInt8) :
-    canonOptionsGo (fuel + 1) [b] =
-      if b = 0 then canonOptionsGo fuel []
-      else if b = 255 then [255]
-      else [255] := rfl
-
-/-- An option area the reader takes canonicalizes to the
-    printed form of the options it read to. -/
-theorem canonOptionsGo_parse :
+/-- An option area the reader takes is one the grammar
+    `OptionArea` derives, carrying the options the reader read.
+    The proof follows the reader one step at a time: each step
+    it takes is one constructor of the grammar. -/
+theorem parseOptionsGo_area :
     ∀ (fuel : Nat) (bs : List UInt8) (os : List DhcpOption),
-    parseOptionsGo fuel bs = some os →
-    canonOptionsGo fuel bs = printOptions os := by
+    parseOptionsGo fuel bs = some os → OptionArea bs os := by
   intro fuel
   induction fuel with
   | zero =>
@@ -557,13 +528,12 @@ theorem canonOptionsGo_parse :
       rw [h1] at h
       simp only [Option.some.injEq] at h
       subst h
-      rfl
+      exact OptionArea.stop
     | cons b rest =>
       by_cases hb0 : b = 0
       · subst hb0
         rw [parseOptionsGo_step, ite_eq_left rfl] at h
-        rw [canonOptionsGo_step, ite_eq_left rfl]
-        exact ih rest os h
+        exact OptionArea.pad (ih rest os h)
       · by_cases hb255 : b = 255
         · subst hb255
           rw [parseOptionsGo_step,
@@ -573,10 +543,9 @@ theorem canonOptionsGo_parse :
           · rw [ite_eq_left hall] at h
             simp only [Option.some.injEq] at h
             subst h
-            rw [canonOptionsGo_step,
-              ite_eq_right (by decide : ¬ ((255 : UInt8) = 0)),
-              ite_eq_left rfl]
-            rfl
+            refine OptionArea.finish (fun z hz => ?_)
+            have hz0 := List.all_eq_true.mp hall z hz
+            exact beq_iff_eq.mp hz0
           · rw [ite_eq_right hall] at h
             simp at h
         · cases rest with
@@ -593,14 +562,10 @@ theorem canonOptionsGo_parse :
               obtain ⟨os', hos', hos''⟩ :=
                 Option.map_eq_some_iff.mp h
               subst hos''
-              rw [canonOptionsGo_step_cons, ite_eq_right hb0,
-                ite_eq_right hb255, ih _ _ hos']
-              show b :: len :: (rest'.take len.toNat) ++
-                  printOptions os'
-                = ((b.toNat).toUInt8 ::
-                    (rest'.take len.toNat).length.toUInt8 ::
-                    (rest'.take len.toNat)) ++ printOptions os'
-              rw [toNat_toUInt8, hcond, toNat_toUInt8]
+              have hitem := OptionArea.item hb0 hb255 hcond
+                (ih _ _ hos')
+              rw [List.take_append_drop] at hitem
+              exact hitem
             · rw [ite_eq_right hcond] at h
               simp at h
 
@@ -721,12 +686,15 @@ theorem parse_print {m : Message} (hw : WF m) :
   rw [ite_eq_left (check53_of_WFOptions hwo)]
 
 /-- The mirror claim: printing a message the parser took
-    gives the canonical form of the bytes it was read from:
-    the first 240 bytes as they stood, then the canonical
-    option area. -/
+    gives the canonical form of the bytes it was read from.
+    The bytes after the first 240 are an option area the
+    grammar derives, carrying the options read, and the print
+    is the first 240 bytes as they stood, then those options
+    printed. -/
 theorem print_parse {bs : List UInt8} {m : Message}
     (h : parse bs = some m) :
-    print m = bs.take 240 ++ canonOptions (bs.drop 240) := by
+    OptionArea (bs.drop 240) m.options ∧
+      print m = bs.take 240 ++ printOptions m.options := by
   simp only [parse] at h
   obtain ⟨⟨f, rest⟩, hf, h⟩ := Option.bind_eq_some_iff.mp h
   dsimp only at h
@@ -743,11 +711,12 @@ theorem print_parse {bs : List UInt8} {m : Message}
       rw [hfix, ← hlen]; exact List.drop_left
     have hos' : parseOptionsGo (rest.length + 1) rest
         = some os := hos
-    have hcanon : canonOptions rest = printOptions os :=
-      canonOptionsGo_parse (rest.length + 1) rest os hos'
-    show printFixed f ++ printOptions os
-      = bs.take 240 ++ canonOptions (bs.drop 240)
-    rw [htake, hdrop, hcanon]
+    refine ⟨?_, ?_⟩
+    · rw [hdrop]
+      exact parseOptionsGo_area (rest.length + 1) rest os hos'
+    · show printFixed f ++ printOptions os
+        = bs.take 240 ++ printOptions os
+      rw [htake]
   · rw [ite_eq_right hc] at h
     simp at h
 

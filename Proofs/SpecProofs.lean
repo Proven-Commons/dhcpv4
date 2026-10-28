@@ -21,7 +21,8 @@ theorem Spec.parse_print {m : Message} (hw : WF m) :
 
 theorem Spec.print_parse {bs : List UInt8} {m : Message}
     (h : parse bs = some m) :
-    print m = bs.take 240 ++ canonOptions (bs.drop 240) :=
+    OptionArea (bs.drop 240) m.options ∧
+      print m = bs.take 240 ++ printOptions m.options :=
   Dhcp.Proofs.print_parse h
 
 theorem Spec.parse_wf {bs : List UInt8} {m : Message}

@@ -10,7 +10,8 @@
   The statements use the code under proof named in
   `bar.toml`, in `Dhcp/Value.lean` and `Dhcp/Parse.lean`, and
   the definitions in `Spec/Defs.lean`, part of the
-  specification: `WF` and its parts, and `canonOptions`.
+  specification: the option area grammar `OptionArea`, and
+  `WF` and its parts.
 -/
 
 import Dhcp
@@ -31,15 +32,21 @@ theorem Spec.parse_print {m : Message} (hw : WF m) :
     parse (print m) = some m := sorry
 
 /-- Printing a message the parser took gives the canonical
-    form of the bytes it was read from: the first 240 bytes
-    as they stood, then the canonical option area, with pad
-    bytes dropped, zero padding after the end byte dropped,
-    and exactly one end byte. So a printer that wrote
-    nothing, or wrote the options as they stood, fails this
-    statement. -/
+    form of the bytes it was read from. The bytes after the
+    first 240 are an option area that the grammar
+    `OptionArea` derives, carrying exactly the options of the
+    message; and the print is the first 240 bytes as they
+    stood, then those options printed, which is the canonical
+    option area: pad bytes dropped, zero padding after the
+    end byte dropped, and exactly one end byte. So the parser
+    takes no input whose option area breaks the grammar, such
+    as one with a code byte and no length byte after it, a
+    length that runs past the end, or a nonzero byte after
+    the end byte. -/
 theorem Spec.print_parse {bs : List UInt8} {m : Message}
     (h : parse bs = some m) :
-    print m = bs.take 240 ++ canonOptions (bs.drop 240) :=
+    OptionArea (bs.drop 240) m.options ∧
+      print m = bs.take 240 ++ printOptions m.options :=
   sorry
 
 /-! ## Soundness

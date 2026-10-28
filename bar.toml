@@ -14,8 +14,9 @@ entry_points = ["Main.lean"]
 [spec]
 files = ["SPEC.md", "Spec.lean", "Spec/Defs.lean"]
 # The code under proof: the functions the statements are about.
-# WF, its parts and canonOptions only give the statements their
-# meaning, so they are in Spec/Defs.lean above, not here.
+# The grammar OptionArea, and WF and its parts, only give the
+# statements their meaning, so they are in Spec/Defs.lean above,
+# not here.
 code = [
   # The data types the statements are about, and the fields of
   # the two structures, which WF in Spec/Defs.lean reads.

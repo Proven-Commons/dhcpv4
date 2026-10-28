@@ -1,45 +1,55 @@
 /-
   The definitions the statements in `Spec.lean` use besides
-  the code under proof: what a well formed message is, and
-  the canonical form of an option area. Neither the parser
-  nor the printer uses them; they only give the statements
-  their meaning. So they are part of the specification, with
-  `Spec.lean` and `SPEC.md`, and the approval hash covers
-  their text, not only their names.
+  the code under proof: the option area grammar, and what a
+  well formed message is. Neither the parser nor the printer
+  uses them; they only give the statements their meaning. So
+  they are part of the specification, with `Spec.lean` and
+  `SPEC.md`, and the approval hash covers their text, not
+  only their names.
 
+  - `OptionArea`: the grammar of an option area, which
+    `Spec.print_parse` is stated with. The canonical form of
+    an area is the printed form of the options it derives.
   - `WFFixed`, `WFOptions` and `WF`: a well formed message,
     the predicate `Spec.parse_print` assumes and
     `Spec.parse_wf` concludes.
-  - `canonOptionsGo` and `canonOptions`: the canonical form
-    of an option area, which `Spec.print_parse` is stated
-    with.
 -/
 
 import Dhcp.Value
 
 namespace Dhcp
 
-/-- The canonical form of an option area: the options as the
-    printer writes them, pad bytes dropped, trailing zeros
-    after the end byte dropped, exactly one end byte, and an
-    end byte supplied when the area had none. Defined with
-    the same fuel shape as the reader. The `print_parse`
-    statement is stated with it. -/
-def canonOptionsGo : Nat → List UInt8 → List UInt8
-  | 0, _ => [255]
-  | _ + 1, [] => [255]
-  | fuel + 1, b :: rest =>
-    if b = 0 then canonOptionsGo fuel rest
-    else if b = 255 then [255]
-    else
-      match rest with
-      | [] => [255]
-      | len :: rest' => b :: len :: (rest'.take len.toNat) ++
-          canonOptionsGo fuel (rest'.drop len.toNat)
-
-/-- The canonical form of an option area. -/
-def canonOptions (bs : List UInt8) : List UInt8 :=
-  canonOptionsGo (bs.length + 1) bs
+/-- The option area grammar of `SPEC.md` (The options), as a
+    relation between the bytes of an option area, everything
+    after the cookie, and the options those bytes carry. An
+    area is read from the front, one piece at a time, and each
+    constructor is one way an area may go on. Nothing else is
+    an option area: a code byte with no length byte after it,
+    a length that runs past the end, and a nonzero byte after
+    the end byte have no derivation. The grammar is written
+    from the rules, not from the parser: it has no fuel, and
+    it says what an area is, not how to read one. -/
+inductive OptionArea : List UInt8 → List DhcpOption → Prop where
+  /-- The input ends after the last item, with no end byte.
+      No more options. -/
+  | stop : OptionArea [] []
+  /-- The end byte, 255, then only zero bytes, which are
+      padding. No more options. -/
+  | finish {zeros : List UInt8} (hz : ∀ z ∈ zeros, z = 0) :
+      OptionArea (255 :: zeros) []
+  /-- A pad byte, 0, which carries nothing, then the rest of
+      the area. -/
+  | pad {rest : List UInt8} {os : List DhcpOption}
+      (h : OptionArea rest os) : OptionArea (0 :: rest) os
+  /-- An item: a code byte, any byte but 0 and 255, a length
+      byte, exactly that many value bytes, then the rest of the
+      area. The item carries the option of that code and those
+      value bytes. -/
+  | item {code len : UInt8} {value rest : List UInt8}
+      {os : List DhcpOption} (h0 : code ≠ 0) (h255 : code ≠ 255)
+      (hlen : value.length = len.toNat) (h : OptionArea rest os) :
+      OptionArea (code :: len :: (value ++ rest))
+        ((code.toNat, value) :: os)
 
 /-- Well formed fixed fields: op is 1 or 2, hlen fits the
     sixteen byte chaddr field, the other numbers fit their

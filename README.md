@@ -73,7 +73,7 @@ not prove the rule in general. The test DISCOVER is the
 | Claim | Theorem |
 |-------|---------|
 | Parsing the printed form of a well formed message gives the message back. | `Spec.parse_print` |
-| Printing a message the parser took gives the canonical form of the bytes it was read from: the first 240 bytes as they stood, then the canonical option area. | `Spec.print_parse` |
+| The option area of every input the parser takes, the bytes after the first 240, is one the option area grammar derives, carrying exactly the options of the parsed message; and printing that message gives the canonical form of the input: the first 240 bytes as they stood, then those options printed. | `Spec.print_parse` |
 | Every message the parser takes is well formed, in the sense below. This is about the message it returns; a parser that refuses everything also meets it, and `Spec.parse_print` rules that parser out. | `Spec.parse_wf` |
 | Example, one input: the test DISCOVER cut to 239 bytes is refused. The fixed fields and the cookie need 240. | `Spec.rejects_short_message` |
 | Example, one input: the test DISCOVER with its third cookie byte set to 100 is refused. The cookie must be 99, 130, 83, 99. | `Spec.rejects_wrong_cookie` |
@@ -97,11 +97,21 @@ one length byte, and option 53, the message type, stands
 exactly once with a one byte value from 1 to 8. The full
 list is in `SPEC.md`.
 
+The option area grammar is `OptionArea` in
+`Spec/Defs.lean`, the rules of `SPEC.md` (The options)
+written as the four ways an option area may go: it ends
+with the input; the end byte follows, then only zero
+bytes; a pad byte, then the rest; or an item (a code byte
+other than 0 and 255, a length byte, and exactly that many
+value bytes), then the rest. Nothing else is an option
+area.
+
 The canonical form of a message keeps the first 240 bytes
 (the fixed fields and the cookie) as they stood, writes
 the options with pad bytes dropped and zero padding after
 the end byte dropped, and writes exactly one end byte,
-supplying one when the input had none.
+supplying one when the input had none: the printed form
+of the options the grammar reads from the area.
 
 The round trip and soundness theorems rest on the proofs
 in `Proofs/RoundTrip.lean`, where they are
@@ -116,9 +126,9 @@ are single inputs checked in the kernel with
 proved one by one in the same file: the two and four byte
 numbers both ways, the readers on printed forms and on
 read forms, the fixed fields both ways, the option reader
-on printed options, and the lemma that a read option area
-canonicalizes to the printed options of the value it read
-to. Under the soundness theorem, three lemmas there say
+on printed options, and the lemma that every option area
+the reader takes is one the grammar derives, with the
+options it read. Under the soundness theorem, three lemmas there say
 that read fixed fields are well formed, that every option
 read has a code from 1 to 254 and a value of at most 255
 bytes, and that options passing the option 53 check hold
@@ -133,17 +143,19 @@ are about.
 - That the parser accepts every message the rules in
   `SPEC.md` allow. The round trips do not need it, and it
   is not proved.
-- That the parser turns away every message the rules
-  forbid, beyond what `Spec.parse_wf` says about the
-  message it returns. The rules on the input bytes
-  themselves, such as the cookie, the zero bytes after the
-  end byte, and a code byte with no length byte, are
-  pinned by the refusal theorems on one input each, not in
-  general. The readings that take an input, such as an
-  option area with no end byte, have no theorem at all.
-  The differential tests in `tests/` check that behaviour
-  instead, and the results file records the outcome,
-  including any failure.
+- That the parser turns away every message the fixed
+  field and option 53 rules forbid, beyond what
+  `Spec.parse_wf` says about the message it returns; the
+  cookie rule, for one, is pinned by a refusal theorem on
+  one input. The option area rules (a code byte with no
+  length byte, a length that runs past the end, a nonzero
+  byte after the end byte) are proved in general:
+  `Spec.print_parse` says the option area of every input
+  the parser takes is one the grammar derives. The
+  readings that take an input, such as an option area with
+  no end byte, have no theorem at all. The differential
+  tests in `tests/` check that behaviour instead, and the
+  results file records the outcome, including any failure.
 - A capture based differential, and a differential
   against an outside decoder. The plan names ISC DHCP and
   dnsmasq captures and the Wireshark dissectors as

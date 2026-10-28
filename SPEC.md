@@ -84,6 +84,26 @@ The readings for the ends of the list:
   but see the option 53 rule below: such a message is turned
   away for want of a message type.
 
+These rules make a grammar, written in Lean as
+`OptionArea` in `Spec/Defs.lean`. An option area is one
+of:
+
+- nothing at all: the input ends after the last item, with
+  no end byte;
+- the end byte, then only zero bytes;
+- a pad byte, then an option area;
+- an item, which is a code byte other than 0 and 255, a
+  length byte, and exactly that many value bytes, then an
+  option area.
+
+The options an area carries are its items, in order, each
+as its code and value bytes. Nothing else is an option
+area: a code byte with no length byte after it, a length
+that runs past the end, and a nonzero byte after the end
+byte have no place in the grammar. Which of the four an
+area is depends on its first byte, and an item's length
+byte says where its value ends.
+
 ## Option 53
 
 Option 53, the message type, is the one option whose value
@@ -171,8 +191,10 @@ So a message that parses prints to a canonical form: the
 first 240 bytes as they stood, then the options with pad
 bytes anywhere among them dropped, zero padding after the
 end byte dropped, exactly one end byte written, and an end
-byte supplied when the input had none. A message already in
-canonical form prints to itself, byte for byte.
+byte supplied when the input had none. In terms of the
+grammar, the canonical form of an option area is the
+printed form of the options it carries. A message already
+in canonical form prints to itself, byte for byte.
 
 ## The claims
 
@@ -188,12 +210,11 @@ option 53 stands exactly once with a one byte value from 1
 to 8.
 
 `Spec.print_parse`: for every byte list the parser takes,
-printing the parsed message gives the canonical form of
-the input, as spelled out above: the first 240 bytes as
-they stood, then the canonical option area (the theorem
-states this with the `canonOptions` function, which walks
-the option area dropping pads and trailing zeros and ends
-it with one end byte).
+the bytes after the first 240 are an option area the
+grammar derives, carrying exactly the options of the
+parsed message, and printing that message gives the
+canonical form of the input, as spelled out above: the
+first 240 bytes as they stood, then those options printed.
 
 `Spec.parse_wf`: every message the parser takes is well
 formed, in the sense spelled out under `Spec.parse_print`.
@@ -204,8 +225,14 @@ parser out.
 
 That the parser accepts every message these rules allow is
 not proved. That it turns away every message they forbid is
-proved only as far as `Spec.parse_wf` reaches: whatever it
-returns is well formed. Single refusals, one for each rule
+proved in general for the option area rules: by
+`Spec.print_parse`, the option area of every input the
+parser takes is one the grammar derives, so it holds no
+code byte without a length byte, no length that runs past
+the end, and no nonzero byte after the end byte. For the
+other rules it is proved as far as `Spec.parse_wf`
+reaches: whatever the parser returns is well formed.
+Single refusals, one for each rule
 above that turns a message away, are pinned as theorems
 (`Spec.rejects_*` in the table below), each on one concrete
 input from the test harness: the 240 byte minimum, the
@@ -233,8 +260,9 @@ prints `error`. A line may end in LF or CR LF.
 
 Each property a reader can check in the page (`README.md`)
 names its theorem. The theorems are stated in `Spec.lean`,
-with the definitions they use besides the code (`WF` and
-its parts, and `canonOptions`) in `Spec/Defs.lean`, and
+with the definitions they use besides the code (the
+grammar `OptionArea`, and `WF` and its parts) in
+`Spec/Defs.lean`, and
 proved in `Proofs/SpecProofs.lean`, resting on the
 proofs in `Proofs/RoundTrip.lean`, where they are
 `Dhcp.Proofs.parse_print`, `Dhcp.Proofs.print_parse`, and
@@ -249,7 +277,7 @@ example request in `README.md`.
 | Property | Theorem |
 |----------|---------|
 | Parsing the printed form of a well formed message gives the message back | `Spec.parse_print` |
-| Printing a message the parser took gives the canonical form of the bytes it was read from | `Spec.print_parse` |
+| The option area of every input the parser takes is one the grammar derives, carrying exactly the options of the parsed message, and printing that message gives the canonical form of the input | `Spec.print_parse` |
 | Every message the parser takes is well formed | `Spec.parse_wf` |
 | Example, one input: the test DISCOVER cut to 239 bytes is refused | `Spec.rejects_short_message` |
 | Example, one input: the test DISCOVER with its third cookie byte set to 100 is refused | `Spec.rejects_wrong_cookie` |
