@@ -11,9 +11,10 @@ state, handles no relay agent behaviour, and reads no
 DHCPv6.
 
 The statements a reviewer approves are in `Spec.lean`,
-with the definitions they use in `Spec/Defs.lean` (what a
-well formed message is, and the canonical form of an
-option area) and their proofs in `Proofs/SpecProofs.lean`.
+with the definitions they use in `Spec/Defs.lean` (the
+rules an input must follow, the option area grammar among
+them, and what a well formed message is) and their proofs
+in `Proofs/SpecProofs.lean`.
 No reviewer has approved them yet, so this project is not
 called verified.
 
@@ -63,18 +64,20 @@ Each claim below names the theorem behind it. The
 theorems are stated in `Spec.lean` (the challenge file,
 where they end in `sorry`) and proved in
 `Proofs/SpecProofs.lean`, under the same names.
-`comparator.json` lists all of them. The first three are
+`comparator.json` lists all of them. The first four are
 general: each holds for every message or input it names.
 Each row that starts "Example, one input" is proved for
-that one input only: it shows the rule on a case, and does
-not prove the rule in general. The test DISCOVER is the
-250 byte request in the example above.
+that one input only: it shows one rule on a case, and the
+rule itself is proved in general by
+`Spec.parse_accepts_iff`. The test DISCOVER is the 250
+byte request in the example above.
 
 | Claim | Theorem |
 |-------|---------|
 | Parsing the printed form of a well formed message gives the message back. | `Spec.parse_print` |
 | The option area of every input the parser takes, the bytes after the first 240, is one the option area grammar derives, carrying exactly the options of the parsed message; and printing that message gives the canonical form of the input: the first 240 bytes as they stood, then those options printed. | `Spec.print_parse` |
 | Every message the parser takes is well formed, in the sense below. This is about the message it returns; a parser that refuses everything also meets it, and `Spec.parse_print` rules that parser out. | `Spec.parse_wf` |
+| The parser takes an input exactly when it follows the rules of `SPEC.md`: at least 240 bytes, op 1 or 2, hlen at most 16, and the cookie at bytes 236 to 239; an option area after them that the grammar derives; and option 53 once among the options that area carries, with a one byte value from 1 to 8. So it turns away every input that breaks a rule, takes every input that follows them all, and reads from it the options the grammar derives. | `Spec.parse_accepts_iff` |
 | Example, one input: the test DISCOVER cut to 239 bytes is refused. The fixed fields and the cookie need 240. | `Spec.rejects_short_message` |
 | Example, one input: the test DISCOVER with its third cookie byte set to 100 is refused. The cookie must be 99, 130, 83, 99. | `Spec.rejects_wrong_cookie` |
 | Example, one input: a message whose option 55 claims ten value bytes, with three left, is refused. | `Spec.rejects_option_overrun` |
@@ -97,14 +100,15 @@ one length byte, and option 53, the message type, stands
 exactly once with a one byte value from 1 to 8. The full
 list is in `SPEC.md`.
 
-The option area grammar is `OptionArea` in
-`Spec/Defs.lean`, the rules of `SPEC.md` (The options)
-written as the four ways an option area may go: it ends
-with the input; the end byte follows, then only zero
-bytes; a pad byte, then the rest; or an item (a code byte
-other than 0 and 255, a length byte, and exactly that many
-value bytes), then the rest. Nothing else is an option
-area.
+The rules are written in Lean in `Spec/Defs.lean`:
+`FixedRules` for the fixed fields, `TypeRule` for option
+53, and the option area grammar `OptionArea`. The grammar
+is the rules of `SPEC.md` (The options) written as the
+four ways an option area may go: it ends with the input;
+the end byte follows, then only zero bytes; a pad byte,
+then the rest; or an item (a code byte other than 0 and
+255, a length byte, and exactly that many value bytes),
+then the rest. Nothing else is an option area.
 
 The canonical form of a message keeps the first 240 bytes
 (the fixed fields and the cookie) as they stood, writes
@@ -116,7 +120,9 @@ of the options the grammar reads from the area.
 The round trip and soundness theorems rest on the proofs
 in `Proofs/RoundTrip.lean`, where they are
 `Dhcp.Proofs.parse_print`, `Dhcp.Proofs.print_parse`, and
-`Dhcp.Proofs.parse_wf`. All three check against the
+`Dhcp.Proofs.parse_wf`, and the statement of which inputs
+the parser takes rests on `Dhcp.Proofs.parse_accepts_iff`
+in `Proofs/Accept.lean`. All four check against the
 standard axioms only (`propext`, `Classical.choice`,
 `Quot.sound`), which a reader can confirm with
 `#print axioms`, or by running
@@ -128,11 +134,14 @@ numbers both ways, the readers on printed forms and on
 read forms, the fixed fields both ways, the option reader
 on printed options, and the lemma that every option area
 the reader takes is one the grammar derives, with the
-options it read. Under the soundness theorem, three lemmas there say
-that read fixed fields are well formed, that every option
-read has a code from 1 to 254 and a value of at most 255
-bytes, and that options passing the option 53 check hold
-option 53 once with a value from 1 to 8.
+options it read. Under the soundness theorem, three lemmas
+there say that read fixed fields are well formed, that
+every option read has a code from 1 to 254 and a value of
+at most 255 bytes, and that options passing the option 53
+check hold option 53 once with a value from 1 to 8. In
+`Proofs/Accept.lean`, the option reader follows every
+derivation of the grammar, and the fixed fields of an
+input that follows the fixed field rules read through.
 
 The command line tool in `Main.lean` calls `Dhcp.parse`
 and `Dhcp.print` directly, the same functions the theorems
@@ -140,22 +149,13 @@ are about.
 
 ## What is not proved
 
-- That the parser accepts every message the rules in
-  `SPEC.md` allow. The round trips do not need it, and it
-  is not proved.
-- That the parser turns away every message the fixed
-  field and option 53 rules forbid, beyond what
-  `Spec.parse_wf` says about the message it returns; the
-  cookie rule, for one, is pinned by a refusal theorem on
-  one input. The option area rules (a code byte with no
-  length byte, a length that runs past the end, a nonzero
-  byte after the end byte) are proved in general:
-  `Spec.print_parse` says the option area of every input
-  the parser takes is one the grammar derives. The
-  readings that take an input, such as an option area with
-  no end byte, have no theorem at all. The differential
-  tests in `tests/` check that behaviour instead, and the
-  results file records the outcome, including any failure.
+- That `FixedRules`, `OptionArea` and `TypeRule` in
+  `Spec/Defs.lean` say what the rules in `SPEC.md` say in
+  words. `Spec.parse_accepts_iff` holds the parser to the
+  Lean rules; that they are the rules on the page is a
+  reading, which the reviewer checks and the differential
+  tests in `tests/` probe from the other side, with an
+  oracle written from the words.
 - A capture based differential, and a differential
   against an outside decoder. The plan names ISC DHCP and
   dnsmasq captures and the Wireshark dissectors as
@@ -185,8 +185,10 @@ are about.
   message type split over two items is refused; and the
   registered message types 9 to 18 (RFC 3203, RFC 4388,
   RFC 6926, RFC 7724) are refused on purpose. These are
-  choices, checked by the tests, not departures the proofs
-  rule out.
+  choices. `Spec.parse_accepts_iff` holds the parser to
+  each of them, through the rules in `Spec/Defs.lean`, and
+  the tests check them; that they depart from the RFCs is
+  what this item records.
 - The meaning of any option except option 53. Every other
   option is carried as its code and value bytes, and no
   per option length or content rule is checked.
@@ -218,10 +220,13 @@ are about.
 - The operating system the program runs on.
 - That `SPEC.md` states the reading of RFC 2131 and
   RFC 2132 you intend. The proofs are about the parser and
-  printer in this repo following each other exactly; the
+  printer in this repo following each other, and the rules
+  in `Spec/Defs.lean`, exactly; the
   fidelity of the spec to the RFCs is a reading, pinned in
   `SPEC.md` where the RFCs leave a choice open, and listed
-  there where it departs from them.
+  there where it departs from them. Likewise, that the
+  rules in `Spec/Defs.lean` are the rules `SPEC.md` states
+  in words.
 - The Python oracle in `tests/run_tests.py` and the
   packets Scapy built. Both are evidence, not proof. The
   results file names the versions used, and states
@@ -250,7 +255,9 @@ are about.
 3. `lake build`: the library, the proofs, and the tool
    build clean, and `lake env lean Proofs/Verify.lean`
    prints the axiom list for the round trip and soundness
-   theorems.
+   theorems, and for the statement of which inputs the
+   parser takes.
 4. Read `SPEC.md` against RFC 2131 and RFC 2132 and check
    the pinned readings, and the readings that depart from
-   the RFCs, are the ones you want.
+   the RFCs, are the ones you want. Then read
+   `Spec/Defs.lean` against `SPEC.md`.

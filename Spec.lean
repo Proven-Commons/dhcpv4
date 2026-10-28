@@ -10,8 +10,8 @@
   The statements use the code under proof named in
   `bar.toml`, in `Dhcp/Value.lean` and `Dhcp/Parse.lean`, and
   the definitions in `Spec/Defs.lean`, part of the
-  specification: the option area grammar `OptionArea`, and
-  `WF` and its parts.
+  specification: the option area grammar `OptionArea`, the
+  rules `FixedRules` and `TypeRule`, and `WF` and its parts.
 -/
 
 import Dhcp
@@ -67,12 +67,37 @@ The parser returns only well formed messages. -/
 theorem Spec.parse_wf {bs : List UInt8} {m : Message}
     (h : parse bs = some m) : WF m := sorry
 
+/-! ## Which inputs the parser takes
+
+The parser takes exactly the inputs that follow the rules of
+`SPEC.md`, as `Spec/Defs.lean` writes them. -/
+
+/-- The parser takes an input, reading the options `os` from
+    it, exactly when the input follows the rules of `SPEC.md`:
+    the fixed field rules on its first 240 bytes (`FixedRules`:
+    at least 240 bytes, op 1 or 2, hlen at most 16, and the
+    cookie at bytes 236 to 239), an option area after them
+    that the grammar `OptionArea` derives with the options
+    `os`, and the option 53 rule on `os` (`TypeRule`). From
+    left to right: the parser turns away every input that
+    breaks a rule. From right to left: it takes every input
+    that follows them all, and reads from it the options the
+    grammar derives. -/
+theorem Spec.parse_accepts_iff {bs : List UInt8}
+    {os : List DhcpOption} :
+    (∃ f, parse bs = some ⟨f, os⟩) ↔
+      FixedRules bs ∧ OptionArea (bs.drop 240) os ∧ TypeRule os :=
+  sorry
+
 /-! ## Refused inputs
 
 Single inputs the parser refuses, one for each rule of
-`SPEC.md` that turns a message away. Each input is one of the named rejection cases
-in the test harness, built there byte by byte from its
-DISCOVER message, and stands here byte for byte the same.
+`SPEC.md` that turns a message away. Each is an instance of
+`Spec.parse_accepts_iff`, kept so that a reader can check
+each rule against one concrete case. Each input is one of
+the named rejection cases in the test harness, built there
+byte by byte from its DISCOVER message, and stands here
+byte for byte the same.
 The differential tests cover these rules on many more
 inputs; these statements pin them so a reader of the
 specification can check each rule against one concrete

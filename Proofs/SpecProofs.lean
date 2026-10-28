@@ -3,7 +3,9 @@
   names.
 
   The round trips and the soundness statement are the
-  theorems proved in `Proofs/RoundTrip.lean`. The refusals
+  theorems proved in `Proofs/RoundTrip.lean`, and the
+  statement of which inputs the parser takes is the one
+  proved in `Proofs/Accept.lean`. The refusals
   are single inputs, checked in the kernel with
   `decide +kernel`: no native evaluation, which the bar
   forbids.
@@ -12,6 +14,7 @@
 import Dhcp
 import Spec.Defs
 import Proofs.RoundTrip
+import Proofs.Accept
 
 open Dhcp
 
@@ -28,6 +31,12 @@ theorem Spec.print_parse {bs : List UInt8} {m : Message}
 theorem Spec.parse_wf {bs : List UInt8} {m : Message}
     (h : parse bs = some m) : WF m :=
   Dhcp.Proofs.parse_wf h
+
+theorem Spec.parse_accepts_iff {bs : List UInt8}
+    {os : List DhcpOption} :
+    (∃ f, parse bs = some ⟨f, os⟩) ↔
+      FixedRules bs ∧ OptionArea (bs.drop 240) os ∧ TypeRule os :=
+  Dhcp.Proofs.parse_accepts_iff
 
 /-- Example, one input: a message of 239 bytes is refused.
     The fixed fields and the cookie need 240, so the message

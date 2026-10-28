@@ -53,6 +53,10 @@ Addresses and the other multi byte fields are held as the
 values of their bytes, read big endian, and printed back big
 endian.
 
+The four rules that turn a message away (the 240 byte
+minimum, the cookie, op, and hlen) are written in Lean as
+`FixedRules` in `Spec/Defs.lean`.
+
 ## The options
 
 After the cookie come the options of RFC 2132, as a row of
@@ -120,6 +124,10 @@ this slice reads. The rules:
   the registered types 9 to 18, which this slice refuses on
   purpose (see the readings below).
 
+These four rules are written in Lean as `TypeRule` in
+`Spec/Defs.lean`: exactly one option carries code 53, and
+its value is one byte from 1 to 8.
+
 Every other option is carried uninterpreted, as its code
 and value bytes, in wire order. An option may repeat; the
 repeats are kept in order as separate items, not joined
@@ -132,7 +140,9 @@ rule, and not its contents. That is the slice boundary.
 Where this slice reads a message differently from RFC 2131,
 RFC 2132, RFC 3396, or the registered message types, the
 reading is a choice, listed here. Each one is what the
-parser does and what the tests check.
+parser does, what `Spec.parse_accepts_iff` holds it to
+through the rules in `Spec/Defs.lean`, and what the tests
+check.
 
 - No end byte. RFC 2131 section 4.1 says "The last option
   must always be the 'end' option." This parser is more
@@ -223,25 +233,29 @@ about the input bytes on their own. A parser that refuses
 every input also meets it; `Spec.parse_print` rules that
 parser out.
 
-That the parser accepts every message these rules allow is
-not proved. That it turns away every message they forbid is
-proved in general for the option area rules: by
-`Spec.print_parse`, the option area of every input the
-parser takes is one the grammar derives, so it holds no
-code byte without a length byte, no length that runs past
-the end, and no nonzero byte after the end byte. For the
-other rules it is proved as far as `Spec.parse_wf`
-reaches: whatever the parser returns is well formed.
-Single refusals, one for each rule
-above that turns a message away, are pinned as theorems
-(`Spec.rejects_*` in the table below), each on one concrete
-input from the test harness: the 240 byte minimum, the
-cookie, op, hlen, a nonzero byte after the end byte, a
-length that runs past the end, a code byte with no length
-byte, and the four option 53 rules. The readings that take
-an input, such as an option area with no end byte or with
-no items, have no theorem. The differential tests in
-`tests/` check the behaviour on many more inputs.
+`Spec.parse_accepts_iff`: the parser takes an input,
+reading the options `os` from it, exactly when the input
+follows the rules above: `FixedRules` on its first 240
+bytes, an option area after them that the grammar derives
+with `os`, and `TypeRule` on `os`. These are the rules of
+The fixed fields, The options, and Option 53, written in
+Lean in `Spec/Defs.lean`. So the parser turns away every
+message the rules forbid, takes every message they allow,
+and reads from it the options the grammar derives.
+Together with `Spec.print_parse` and `Spec.parse_wf`, which
+say what it returns, this covers every input: whether the
+parser takes it, and what it reads from it.
+
+Single refusals, one for each rule above that turns a
+message away, are also pinned as theorems (`Spec.rejects_*`
+in the table below), each on one concrete input from the
+test harness: the 240 byte minimum, the cookie, op, hlen,
+a nonzero byte after the end byte, a length that runs past
+the end, a code byte with no length byte, and the four
+option 53 rules. Each is an instance of
+`Spec.parse_accepts_iff`, kept as an example a reader can
+check. The differential tests in `tests/` check the
+behaviour on many more inputs.
 
 ## The command-line tool
 
@@ -261,16 +275,19 @@ prints `error`. A line may end in LF or CR LF.
 Each property a reader can check in the page (`README.md`)
 names its theorem. The theorems are stated in `Spec.lean`,
 with the definitions they use besides the code (the
-grammar `OptionArea`, and `WF` and its parts) in
-`Spec/Defs.lean`, and
-proved in `Proofs/SpecProofs.lean`, resting on the
+grammar `OptionArea`, the rules `FixedRules` and
+`TypeRule`, and `WF` and its parts) in `Spec/Defs.lean`,
+and proved in `Proofs/SpecProofs.lean`, resting on the
 proofs in `Proofs/RoundTrip.lean`, where they are
 `Dhcp.Proofs.parse_print`, `Dhcp.Proofs.print_parse`, and
-`Dhcp.Proofs.parse_wf`. The refusal theorems are single
-inputs, one for each named rejection case in the test
-harness, so each row that starts "Example, one input" is
-proved for that input only, not as a general rule; the
-tests in `tests/` cover each rule on many more inputs. The
+`Dhcp.Proofs.parse_wf`, and in `Proofs/Accept.lean`, where
+the last is `Dhcp.Proofs.parse_accepts_iff`. The refusal
+theorems are single inputs, one for each named rejection
+case in the test harness, so each row that starts
+"Example, one input" is proved for that input only; the
+rule it shows is proved in general by
+`Spec.parse_accepts_iff`, and the tests in `tests/` cover
+each rule on many more inputs. The
 test DISCOVER is the harness's DISCOVER, the 250 byte
 example request in `README.md`.
 
@@ -279,6 +296,7 @@ example request in `README.md`.
 | Parsing the printed form of a well formed message gives the message back | `Spec.parse_print` |
 | The option area of every input the parser takes is one the grammar derives, carrying exactly the options of the parsed message, and printing that message gives the canonical form of the input | `Spec.print_parse` |
 | Every message the parser takes is well formed | `Spec.parse_wf` |
+| The parser takes an input, reading the options `os`, exactly when the input follows the fixed field rules, its option area derives `os` in the grammar, and `os` meets the option 53 rule | `Spec.parse_accepts_iff` |
 | Example, one input: the test DISCOVER cut to 239 bytes is refused | `Spec.rejects_short_message` |
 | Example, one input: the test DISCOVER with its third cookie byte set to 100 is refused | `Spec.rejects_wrong_cookie` |
 | Example, one input: a message whose option 55 claims ten value bytes, with three left, is refused | `Spec.rejects_option_overrun` |

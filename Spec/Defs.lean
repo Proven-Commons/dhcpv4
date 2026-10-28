@@ -1,15 +1,19 @@
 /-
   The definitions the statements in `Spec.lean` use besides
-  the code under proof: the option area grammar, and what a
-  well formed message is. Neither the parser nor the printer
-  uses them; they only give the statements their meaning. So
-  they are part of the specification, with `Spec.lean` and
-  `SPEC.md`, and the approval hash covers their text, not
-  only their names.
+  the code under proof: the rules an input must follow, and
+  what a well formed message is. Neither the parser nor the
+  printer uses them; they only give the statements their
+  meaning. So they are part of the specification, with
+  `Spec.lean` and `SPEC.md`, and the approval hash covers
+  their text, not only their names.
 
   - `OptionArea`: the grammar of an option area, which
-    `Spec.print_parse` is stated with. The canonical form of
-    an area is the printed form of the options it derives.
+    `Spec.print_parse` and `Spec.parse_accepts_iff` are
+    stated with. The canonical form of an area is the printed
+    form of the options it derives.
+  - `FixedRules` and `TypeRule`: the fixed field rules on the
+    first 240 bytes, and the option 53 rule on the options,
+    which `Spec.parse_accepts_iff` is stated with.
   - `WFFixed`, `WFOptions` and `WF`: a well formed message,
     the predicate `Spec.parse_print` assumes and
     `Spec.parse_wf` concludes.
@@ -51,6 +55,17 @@ inductive OptionArea : List UInt8 → List DhcpOption → Prop where
       OptionArea (code :: len :: (value ++ rest))
         ((code.toNat, value) :: os)
 
+/-- The rules of `SPEC.md` (The fixed fields) on the bytes
+    before the option area: there are at least 240 bytes; op,
+    byte 0, is 1 or 2; hlen, byte 2, is at most 16; and bytes
+    236 to 239 are the magic cookie, 99, 130, 83, 99. Every
+    other byte of the first 240 is carried unchecked. -/
+def FixedRules (bs : List UInt8) : Prop :=
+  240 ≤ bs.length ∧
+  (bs.getD 0 0 = 1 ∨ bs.getD 0 0 = 2) ∧
+  (bs.getD 2 0).toNat ≤ 16 ∧
+  (bs.drop 236).take 4 = [99, 130, 83, 99]
+
 /-- Well formed fixed fields: op is 1 or 2, hlen fits the
     sixteen byte chaddr field, the other numbers fit their
     widths, and the three byte blocks hold their full
@@ -64,14 +79,19 @@ def WFFixed (f : Fixed) : Prop :=
   f.chaddr.length = 16 ∧ f.sname.length = 64 ∧
   f.file.length = 128
 
-/-- Well formed options: every code runs from 1 to 254,
-    every value fits one length byte, and option 53, the
-    message type, stands exactly once, with a one byte value
-    from 1 to 8. -/
-def WFOptions (os : List DhcpOption) : Prop :=
-  (∀ o ∈ os, 1 ≤ o.1 ∧ o.1 ≤ 254 ∧ o.2.length ≤ 255) ∧
+/-- The option 53 rule of `SPEC.md` (Option 53): option 53,
+    the message type, stands exactly once among the options,
+    with a one byte value from 1 to 8. -/
+def TypeRule (os : List DhcpOption) : Prop :=
   ∃ t : UInt8, os.filter (fun o => o.1 == 53) = [(53, [t])] ∧
     1 ≤ t.toNat ∧ t.toNat ≤ 8
+
+/-- Well formed options: every code runs from 1 to 254,
+    every value fits one length byte, and the option 53 rule
+    holds. -/
+def WFOptions (os : List DhcpOption) : Prop :=
+  (∀ o ∈ os, 1 ≤ o.1 ∧ o.1 ≤ 254 ∧ o.2.length ≤ 255) ∧
+  TypeRule os
 
 /-- A well formed message: well formed fixed fields and well
     formed options. -/

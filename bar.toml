@@ -14,14 +14,15 @@ entry_points = ["Main.lean"]
 [spec]
 files = ["SPEC.md", "Spec.lean", "Spec/Defs.lean"]
 # The code under proof: the functions the statements are about.
-# The grammar OptionArea, and WF and its parts, only give the
-# statements their meaning, so they are in Spec/Defs.lean above,
-# not here.
+# The grammar OptionArea, the rules FixedRules and TypeRule, and
+# WF and its parts only give the statements their meaning, so
+# they are in Spec/Defs.lean above, not here.
 code = [
-  # The data types the statements are about, and the fields of
-  # the two structures, which WF in Spec/Defs.lean reads.
+  # The data types the statements are about, the fields of the
+  # two structures, which WF in Spec/Defs.lean reads, and the
+  # message constructor, which parse_accepts_iff is stated with.
   "Dhcp.DhcpOption", "Dhcp.Fixed", "Dhcp.Message",
-  "Dhcp.Message.fixed", "Dhcp.Message.options",
+  "Dhcp.Message.mk", "Dhcp.Message.fixed", "Dhcp.Message.options",
   "Dhcp.Fixed.op", "Dhcp.Fixed.htype", "Dhcp.Fixed.hlen",
   "Dhcp.Fixed.hops", "Dhcp.Fixed.xid", "Dhcp.Fixed.secs",
   "Dhcp.Fixed.flags", "Dhcp.Fixed.ciaddr", "Dhcp.Fixed.yiaddr",
