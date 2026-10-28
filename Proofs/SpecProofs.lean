@@ -2,10 +2,11 @@
   Proofs of the statements in `Spec.lean`, under the same
   names.
 
-  The round trips are the theorems proved in
-  `Proofs/RoundTrip.lean`. The refusals are single inputs,
-  checked in the kernel with `decide +kernel`: no native
-  evaluation, which the bar forbids.
+  The round trips and the soundness statement are the
+  theorems proved in `Proofs/RoundTrip.lean`. The refusals
+  are single inputs, checked in the kernel with
+  `decide +kernel`: no native evaluation, which the bar
+  forbids.
 -/
 
 import Dhcp
@@ -21,6 +22,10 @@ theorem Spec.print_parse {bs : List UInt8} {m : Message}
     (h : parse bs = some m) :
     print m = bs.take 240 ++ canonOptions (bs.drop 240) :=
   Dhcp.Proofs.print_parse h
+
+theorem Spec.parse_wf {bs : List UInt8} {m : Message}
+    (h : parse bs = some m) : WF m :=
+  Dhcp.Proofs.parse_wf h
 
 /-- A message of 239 bytes is refused: the fixed fields
     and the cookie need 240, so the message is cut short

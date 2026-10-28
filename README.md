@@ -64,6 +64,7 @@ where they end in `sorry`) and proved in
 |-------|---------|
 | Parsing the printed form of a well formed message gives the message back. | `Spec.parse_print` |
 | Printing a message the parser took gives the canonical form of the bytes it was read from: the first 240 bytes as they stood, then the canonical option area. | `Spec.print_parse` |
+| Every message the parser takes is well formed, in the sense below. This is about the message it returns; a parser that refuses everything also meets it, and `Spec.parse_print` rules that parser out. | `Spec.parse_wf` |
 | A message of 239 bytes is refused: the fixed fields and the cookie need 240. | `Spec.rejects_short_message` |
 | A message with a wrong magic cookie is refused: the cookie must be 99, 130, 83, 99. | `Spec.rejects_wrong_cookie` |
 | An option whose length runs past the end of the message is refused. | `Spec.rejects_option_overrun` |
@@ -91,12 +92,13 @@ the options with pad bytes dropped and zero padding after
 the end byte dropped, and writes exactly one end byte,
 supplying one when the input had none.
 
-The round trip theorems rest on the proofs in
-`Proofs/RoundTrip.lean`, where they are
-`Dhcp.Proofs.parse_print` and `Dhcp.Proofs.print_parse`.
-Both check against the standard axioms only (`propext`,
-`Classical.choice`, `Quot.sound`), which a reader can
-confirm with `#print axioms`, or by running
+The round trip and soundness theorems rest on the proofs
+in `Proofs/RoundTrip.lean`, where they are
+`Dhcp.Proofs.parse_print`, `Dhcp.Proofs.print_parse`, and
+`Dhcp.Proofs.parse_wf`. All three check against the
+standard axioms only (`propext`, `Classical.choice`,
+`Quot.sound`), which a reader can confirm with
+`#print axioms`, or by running
 `lake env lean Proofs/Verify.lean`. The refusal theorems
 are single inputs checked in the kernel with
 `decide +kernel`. Under the round trips, the steps are
@@ -114,12 +116,17 @@ are about.
 ## What is not proved
 
 - That the parser accepts every message the rules in
-  `SPEC.md` allow, and turns away every message they
-  forbid. The round trips do not need either, and the
-  refusal theorems pin single inputs only, so neither
-  holds in general as a proof. The differential tests in
-  `tests/` check that behaviour instead, and the results
-  file records the outcome, including any failure.
+  `SPEC.md` allow. The round trips do not need it, and it
+  is not proved.
+- That the parser turns away every message the rules
+  forbid, beyond what `Spec.parse_wf` says about the
+  message it returns. The rules on the input bytes
+  themselves, such as the cookie, the zero bytes after the
+  end byte, and a code byte with no length byte, are
+  pinned by the refusal theorems on one input each, not in
+  general. The differential tests in `tests/` check that
+  behaviour instead, and the results file records the
+  outcome, including any failure.
 - A capture based differential. The plan names ISC DHCP
   and dnsmasq captures as oracles. No captures are
   available in this environment, so no capture corpus ran,

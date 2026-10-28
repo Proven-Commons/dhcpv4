@@ -138,13 +138,21 @@ states this with the `canonOptions` function, which walks
 the option area dropping pads and trailing zeros and ends
 it with one end byte).
 
-That the parser accepts every message these rules allow,
-and turns away every message they forbid, is not proved.
-Single refusals, one for each headline rule above, are
-pinned as theorems (`Spec.rejects_*` in the table below),
-each on one concrete input from the test harness. The
-differential tests in `tests/` check the behaviour on many
-more inputs instead.
+`Spec.parse_wf`: every message the parser takes is well
+formed, in the sense spelled out under `Spec.parse_print`.
+The statement is about the message the parser returns, not
+about the input bytes on their own. A parser that refuses
+every input also meets it; `Spec.parse_print` rules that
+parser out.
+
+That the parser accepts every message these rules allow is
+not proved. That it turns away every message they forbid is
+proved only as far as `Spec.parse_wf` reaches: whatever it
+returns is well formed. Single refusals, one for each
+headline rule above, are pinned as theorems
+(`Spec.rejects_*` in the table below), each on one concrete
+input from the test harness. The differential tests in
+`tests/` check the behaviour on many more inputs.
 
 ## The command-line tool
 
@@ -164,8 +172,9 @@ prints `error`. A line may end in LF or CR LF.
 Each property a reader can check in the page (`README.md`)
 names its theorem. The theorems are stated in `Spec.lean`
 and proved in `Proofs/SpecProofs.lean`, resting on the
-round trip proofs in `Proofs/RoundTrip.lean`, where they
-are `Dhcp.Proofs.parse_print` and `Dhcp.Proofs.print_parse`.
+proofs in `Proofs/RoundTrip.lean`, where they are
+`Dhcp.Proofs.parse_print`, `Dhcp.Proofs.print_parse`, and
+`Dhcp.Proofs.parse_wf`.
 The refusal theorems are single inputs, one for each named
 rejection case in the test harness; the tests in `tests/`
 cover each rule on many more inputs.
@@ -174,6 +183,7 @@ cover each rule on many more inputs.
 |----------|---------|
 | Parsing the printed form of a well formed message gives the message back | `Spec.parse_print` |
 | Printing a message the parser took gives the canonical form of the bytes it was read from | `Spec.print_parse` |
+| Every message the parser takes is well formed | `Spec.parse_wf` |
 | A message shorter than 240 bytes is refused | `Spec.rejects_short_message` |
 | A message with a wrong magic cookie is refused | `Spec.rejects_wrong_cookie` |
 | An option length that runs past the end of the message is refused | `Spec.rejects_option_overrun` |

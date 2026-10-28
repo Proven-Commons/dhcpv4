@@ -357,6 +357,37 @@ theorem parseFixed_inv {bs : List UInt8} {f : Fixed}
   · rw [ite_eq_right hc] at h
     cases h
 
+/-- The fixed fields a successful read gives are well formed:
+    op is 1 or 2, hlen is at most 16, every number fits the
+    bytes it was read from, and the three byte blocks hold
+    their full lengths. -/
+theorem parseFixed_wf {bs : List UInt8} {f : Fixed}
+    {rest : List UInt8} (h : parseFixed bs = some (f, rest)) :
+    WFFixed f := by
+  rw [parseFixed.eq_1] at h
+  obtain ⟨op, r1, _, _, h⟩ := withU8_inv h
+  obtain ⟨htype, r2, _, b2, h⟩ := withU8_inv h
+  obtain ⟨hlen, r3, _, _, h⟩ := withU8_inv h
+  obtain ⟨hops, r4, _, b4, h⟩ := withU8_inv h
+  obtain ⟨xid, r5, _, b5, h⟩ := withU32_inv h
+  obtain ⟨secs, r6, _, b6, h⟩ := withU16_inv h
+  obtain ⟨flags, r7, _, b7, h⟩ := withU16_inv h
+  obtain ⟨ciaddr, r8, _, b8, h⟩ := withU32_inv h
+  obtain ⟨yiaddr, r9, _, b9, h⟩ := withU32_inv h
+  obtain ⟨siaddr, r10, _, b10, h⟩ := withU32_inv h
+  obtain ⟨giaddr, r11, _, b11, h⟩ := withU32_inv h
+  obtain ⟨chaddr, r12, l12, _, h⟩ := withBytes_inv h
+  obtain ⟨sname, r13, l13, _, h⟩ := withBytes_inv h
+  obtain ⟨file, r14, l14, _, h⟩ := withBytes_inv h
+  obtain ⟨r15, _, h⟩ := withCookie_inv h
+  by_cases hc : (op = 1 ∨ op = 2) ∧ hlen ≤ 16
+  · rw [ite_eq_left hc] at h
+    cases h
+    exact ⟨hc.1, b2, hc.2, b4, b5, b6, b7, b8, b9, b10, b11,
+      l12, l13, l14⟩
+  · rw [ite_eq_right hc] at h
+    cases h
+
 /-! ## The options -/
 
 /-- One step of the option reader on a byte and what follows
@@ -569,6 +600,76 @@ theorem canonOptionsGo_parse :
             · rw [if_neg hcond] at h
               simp at h
 
+/-- Every option the reader takes has a code from 1 to 254
+    and a value of at most 255 bytes: a pad or end byte is
+    never read as a code, and a value is as long as the one
+    length byte before it says. -/
+theorem parseOptionsGo_wf :
+    ∀ (fuel : Nat) (bs : List UInt8) (os : List DhcpOption),
+    parseOptionsGo fuel bs = some os →
+    ∀ o ∈ os, 1 ≤ o.1 ∧ o.1 ≤ 254 ∧ o.2.length ≤ 255 := by
+  intro fuel
+  induction fuel with
+  | zero =>
+    intro bs os h
+    simp [parseOptionsGo] at h
+  | succ f ih =>
+    intro bs os h
+    cases bs with
+    | nil =>
+      have h1 : parseOptionsGo (f + 1) ([] : List UInt8)
+          = some [] := rfl
+      rw [h1] at h
+      cases h
+      intro o ho
+      cases ho
+    | cons b rest =>
+      by_cases hb0 : b = 0
+      · subst hb0
+        rw [parseOptionsGo_step, ite_eq_left rfl] at h
+        exact ih rest os h
+      · by_cases hb255 : b = 255
+        · subst hb255
+          rw [parseOptionsGo_step,
+            ite_eq_right (by decide : ¬ ((255 : UInt8) = 0)),
+            ite_eq_left rfl] at h
+          by_cases hall : rest.all (fun x => x == 0) = true
+          · rw [ite_eq_left hall] at h
+            cases h
+            intro o ho
+            cases ho
+          · rw [ite_eq_right hall] at h
+            cases h
+        · cases rest with
+          | nil =>
+            rw [parseOptionsGo_step_single, ite_eq_right hb0,
+              ite_eq_right hb255] at h
+            cases h
+          | cons len rest' =>
+            rw [parseOptionsGo_step_cons, ite_eq_right hb0,
+              ite_eq_right hb255] at h
+            by_cases hcond :
+                (rest'.take len.toNat).length = len.toNat
+            · rw [ite_eq_left hcond] at h
+              obtain ⟨os', hos', hos''⟩ :=
+                Option.map_eq_some_iff.mp h
+              subst hos''
+              intro o ho
+              cases ho with
+              | head =>
+                have hlt := toNat_lt b
+                have hl := toNat_lt len
+                have h0 : b.toNat ≠ 0 := fun e =>
+                  hb0 (UInt8.toNat_inj.mp e)
+                have h255 : b.toNat ≠ 255 := fun e =>
+                  hb255 (UInt8.toNat_inj.mp e)
+                dsimp only
+                rw [hcond]
+                omega
+              | tail _ ho' => exact ih _ os' hos' o ho'
+            · rw [ite_eq_right hcond] at h
+              cases h
+
 /-! ## The option 53 check -/
 
 /-- Well formed options pass the option 53 check. -/
@@ -580,6 +681,24 @@ theorem check53_of_WFOptions {os : List DhcpOption}
   show decide (1 ≤ t.toNat ∧ t.toNat ≤ 8) = true
   rw [decide_eq_true_eq]
   exact ⟨h1, h8⟩
+
+/-- Options that pass the option 53 check hold option 53
+    exactly once, with a one byte value from 1 to 8. -/
+theorem check53_type {os : List DhcpOption}
+    (h : check53 os = true) :
+    ∃ t : UInt8, os.filter (fun o => o.1 == 53) = [(53, [t])] ∧
+      1 ≤ t.toNat ∧ t.toNat ≤ 8 := by
+  unfold check53 at h
+  split at h
+  · rename_i c t heq
+    have hmem : (c, [t]) ∈ os.filter (fun o => o.1 == 53) := by
+      rw [heq]; exact List.mem_singleton_self _
+    have hc : c = 53 := by
+      have h53 := (List.mem_filter.mp hmem).2
+      exact Nat.eq_of_beq_eq_true h53
+    subst hc
+    exact ⟨t, heq, of_decide_eq_true h⟩
+  · cases h
 
 /-! ## The headline theorems -/
 
@@ -627,5 +746,23 @@ theorem print_parse {bs : List UInt8} {m : Message}
     rw [htake, hdrop, hcanon]
   · rw [if_neg hc] at h
     simp at h
+
+/-- Soundness: every message the parser takes is well formed,
+    in the sense of `WF`, the same predicate `parse_print`
+    assumes. -/
+theorem parse_wf {bs : List UInt8} {m : Message}
+    (h : parse bs = some m) : WF m := by
+  simp only [parse] at h
+  obtain ⟨⟨f, rest⟩, hf, h⟩ := Option.bind_eq_some_iff.mp h
+  dsimp only at h
+  obtain ⟨os, hos, h⟩ := Option.bind_eq_some_iff.mp h
+  by_cases hc : check53 os = true
+  · rw [ite_eq_left hc] at h
+    cases h
+    exact ⟨parseFixed_wf hf,
+      parseOptionsGo_wf (rest.length + 1) rest os hos,
+      check53_type hc⟩
+  · rw [ite_eq_right hc] at h
+    cases h
 
 end Dhcp.Proofs

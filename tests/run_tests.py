@@ -16,6 +16,11 @@ Four parts.
    field, an empty input, and an option area with nothing the
    message type rule can use).
 
+Every `ok:` answer is also checked to be a well formed
+message, as `Spec.parse_wf` says: op 1 or 2, hlen at most
+16, the cookie at offset 236, codes from 1 to 254, and option
+53 exactly once with a value from 1 to 8.
+
 2. A differential run against a strict Python oracle written
    in this harness from the rules in SPEC.md: random well
    formed messages, some with pad bytes sprinkled among the
@@ -251,6 +256,46 @@ def expected(data):
     return "ok:" + codes(got)
 
 
+def reprint_problem(answer):
+    """What `Spec.parse_wf` says, checked on the tool's own
+    answer: when the answer is `ok:`, the reprinted message is
+    well formed. Returns why it is not, or None. The reprint is
+    in canonical form, so it has no pad bytes and ends at its
+    one end byte."""
+    if not answer.startswith("ok:"):
+        return None
+    try:
+        data = bytes(int(x) for x in answer[3:].split(","))
+    except ValueError:
+        return "the reprint is not a list of byte codes"
+    if len(data) < 241:
+        return "the reprint is shorter than 241 bytes"
+    if data[0] not in (1, 2):
+        return f"op {data[0]}"
+    if data[2] > 16:
+        return f"hlen {data[2]}"
+    if data[236:240] != COOKIE:
+        return "no cookie at offset 236"
+    types = []
+    i = 240
+    while data[i] != 255:
+        c = data[i]
+        if c == 0:
+            return "a pad byte in the reprint"
+        if i + 1 >= len(data) or i + 2 + data[i + 1] > len(data):
+            return "an option runs past the end of the reprint"
+        if c == 53:
+            types.append(bytes(data[i + 2:i + 2 + data[i + 1]]))
+        i += 2 + data[i + 1]
+        if i >= len(data):
+            return "no end byte in the reprint"
+    if i != len(data) - 1:
+        return "bytes after the end byte of the reprint"
+    if len(types) != 1 or len(types[0]) != 1 or not 1 <= types[0][0] <= 8:
+        return f"option 53 values {[t.hex() for t in types]}"
+    return None
+
+
 # ---------------------------------------------------------------- checks
 
 
@@ -263,8 +308,11 @@ class Tally:
     def check(self, data, answer, label):
         self.inputs += 1
         want = expected(data)
-        if answer == want:
+        problem = reprint_problem(str(answer))
+        if answer == want and problem is None:
             self.agreements += 1
+        elif problem is not None:
+            self.failures.append(f"{label}: reprint not well formed: {problem}")
         else:
             self.failures.append(
                 f"{label}: want {want[:80]}, got {str(answer)[:80]}"

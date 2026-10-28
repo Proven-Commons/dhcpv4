@@ -41,6 +41,24 @@ theorem Spec.print_parse {bs : List UInt8} {m : Message}
     print m = bs.take 240 ++ canonOptions (bs.drop 240) :=
   sorry
 
+/-! ## Soundness
+
+The parser returns only well formed messages. -/
+
+/-- Every message the parser takes is well formed, in the
+    sense of `Dhcp.WF`, the same predicate `Spec.parse_print`
+    assumes: op is 1 or 2, htype and hops fit one byte, hlen
+    is at most 16, xid and the four addresses fit four bytes,
+    secs and flags fit two bytes, chaddr, sname, and file hold
+    16, 64, and 128 bytes, every option code runs from 1 to
+    254 with a value of at most 255 bytes, and option 53
+    stands exactly once with a one byte value from 1 to 8.
+    The statement is about the message returned. A parser
+    that refuses every input also meets it;
+    `Spec.parse_print` rules that parser out. -/
+theorem Spec.parse_wf {bs : List UInt8} {m : Message}
+    (h : parse bs = some m) : WF m := sorry
+
 /-! ## Refused inputs
 
 Single inputs the parser refuses, one for each headline rule
