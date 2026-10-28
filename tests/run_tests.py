@@ -42,7 +42,9 @@ Two more line checks stand apart from the fixed cases of
 part 1: the requests `parse ` and `parse`, with no codes,
 must be answered `none` (the empty message is turned away).
 The results file counts them on their own line, not as
-fixed cases.
+fixed cases. So is the example request in README.md: the
+harness reads it from the page, runs it, and checks that the
+answer is `ok:` and the same codes, as the page says.
 
     python3 tests/run_tests.py [--seed N] [--count N]
 
@@ -64,6 +66,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 EXE = ROOT / ".lake" / "build" / "bin" / "dhcpv4"
 RESULTS = ROOT / "tests" / "TEST-RESULTS.md"
+README = ROOT / "README.md"
 TIMEOUT = 900
 BUILD_TIMEOUT = 3600
 CHUNK = 200
@@ -473,6 +476,29 @@ def run_fixed():
     return tally
 
 
+def run_readme():
+    """The example request on the page, run as written. The page
+    says the answer is `ok:` and the same codes back."""
+    tally = Tally()
+    prefix = "printf 'parse "
+    suffix = "\\n' | .lake/build/bin/dhcpv4"
+    lines = [l for l in README.read_text().splitlines()
+             if l.startswith(prefix) and l.endswith(suffix)]
+    if len(lines) != 1:
+        tally.inputs += 1
+        tally.failures.append(
+            f"README example: found {len(lines)} example lines, want 1")
+        return tally
+    arg = lines[0][len(prefix):-len(suffix)]
+    req = "parse " + arg
+    answers, problems = ask_all([req])
+    tally.failures += problems
+    for answer in answers:
+        tally.check_line("README example", answer, "ok:" + arg,
+                         "README example")
+    return tally
+
+
 def run_random(seed, valid_count, raw_count):
     tally = Tally()
     rng = random.Random(seed)
@@ -696,13 +722,15 @@ def main():
             return 1
 
     fixed = run_fixed()
+    readme = run_readme()
     rand = run_random(args.seed, args.count, args.raw_count)
     mut = run_mutations()
     scapy = run_scapy()
     malf = run_malformed()
 
     failures = (
-        fixed.failures + fixed.lines.failures + rand.failures
+        fixed.failures + fixed.lines.failures + readme.failures
+        + rand.failures
         + mut.failures + scapy.failures + malf.failures
     )
     total_in = (
@@ -739,6 +767,8 @@ def main():
         f" rejection shapes): {fixed.agreements} of {fixed.inputs} agreements",
         f"- Requests with no codes, answered none:"
         f" {fixed.lines.agreements} of {fixed.lines.inputs}",
+        f"- README example answered ok: with the same codes:"
+        f" {readme.agreements} of {readme.inputs}",
         f"- Random well formed messages: part of {rand.agreements} of"
         f" {rand.inputs} agreements in the random run (well formed"
         f" {args.count}, raw byte strings {args.raw_count})",

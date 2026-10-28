@@ -28,15 +28,19 @@ parses, `none` when the message is turned away, and
 
 ```
 lake build
-printf 'parse 1,1,6,0,18,52,86,120,0,0,128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,11,130,1,252,66,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,99,130,83,99,53,1,1,55,4,1,3,6,15,255\n' | .lake/build/bin/dhcpv4
+printf 'parse 1,1,6,0,18,52,86,120,0,0,128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,11,130,1,252,66,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,99,130,83,99,53,1,1,55,4,1,3,6,15,255\n' | .lake/build/bin/dhcpv4
 ```
 
-That request is a DISCOVER (broadcast flag set, a six byte
-hardware address in chaddr, options 53 and 55) and the
-answer is `ok:` with the same codes back, since the message
-is already in canonical form. A message the parser turns
-away, such as the single code `1`, answers `none`. See
-`SPEC.md` for the full protocol.
+That request is a 250 byte DISCOVER: 34 bytes of fields
+(op 1, htype 1, hlen 6, xid 0x12345678, the broadcast flag
+set, and the six byte hardware address 00:0b:82:01:fc:42 at
+the front of chaddr), 202 zero bytes (the rest of chaddr,
+then sname and file), the cookie at offset 236, then
+option 53 with value 1, option 55 with four codes, and the
+end byte. The answer is `ok:` followed by the same 250
+codes, since the message is already in canonical form. A
+message the parser turns away, such as the single code
+`1`, answers `none`. See `SPEC.md` for the full protocol.
 
 `python3 tests/run_tests.py` rebuilds the tool, runs the
 fixed cases, the differential run against the harness
