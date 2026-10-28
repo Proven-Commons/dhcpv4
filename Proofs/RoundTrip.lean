@@ -12,8 +12,10 @@
     carrying the options read, and printing the parsed
     message gives the canonical form of the input: the first
     240 bytes as they stood (the fixed fields and the cookie
-    stand unchanged under printing), then those options
-    printed, with no pad bytes and exactly one end byte.
+    stand unchanged under printing), then the canonical
+    option area `canonArea` (in `Spec/Defs.lean`) carrying
+    those options, with no pad bytes and exactly one end
+    byte.
   - `parse_wf`: every message the parser takes is well
     formed, in the sense of `WF`.
 
@@ -22,7 +24,8 @@
   the bytes they were read from; the readers invert on
   printed forms and on read forms; the fixed fields invert
   both ways; the option reader inverts on printed options;
-  and every option area the reader takes is one the grammar
+  the printed options are the canonical option area; and
+  every option area the reader takes is one the grammar
   derives, with the options it read. For soundness, the
   read fixed fields, each option read, and the option 53 check
   each give their part of `WF`.
@@ -507,6 +510,21 @@ theorem parseOptions_printOptions {os : List DhcpOption}
     (printOptions os) = some os
   exact parseOptionsGo_printOptions os _ hw (Nat.lt_succ_self _)
 
+/-- The printer writes the options as the canonical option
+    area of `Spec/Defs.lean`: each option as its code byte,
+    its length byte, and its value bytes, then one end byte. -/
+theorem printOptions_eq_canonArea :
+    ∀ (os : List DhcpOption), printOptions os = canonArea os := by
+  intro os
+  induction os with
+  | nil => rfl
+  | cons o os ih =>
+    obtain ⟨c, v⟩ := o
+    show (c.toUInt8 :: v.length.toUInt8 :: v) ++ printOptions os
+      = canonArea ((c, v) :: os)
+    rw [ih]
+    simp only [canonArea, List.flatMap_cons, List.append_assoc]
+
 /-- An option area the reader takes is one the grammar
     `OptionArea` derives, carrying the options the reader read.
     The proof follows the reader one step at a time: each step
@@ -689,12 +707,12 @@ theorem parse_print {m : Message} (hw : WF m) :
     gives the canonical form of the bytes it was read from.
     The bytes after the first 240 are an option area the
     grammar derives, carrying the options read, and the print
-    is the first 240 bytes as they stood, then those options
-    printed. -/
+    is the first 240 bytes as they stood, then the canonical
+    option area `canonArea` carrying those options. -/
 theorem print_parse {bs : List UInt8} {m : Message}
     (h : parse bs = some m) :
     OptionArea (bs.drop 240) m.options ∧
-      print m = bs.take 240 ++ printOptions m.options := by
+      print m = bs.take 240 ++ canonArea m.options := by
   simp only [parse] at h
   obtain ⟨⟨f, rest⟩, hf, h⟩ := Option.bind_eq_some_iff.mp h
   dsimp only at h
@@ -715,8 +733,8 @@ theorem print_parse {bs : List UInt8} {m : Message}
     · rw [hdrop]
       exact parseOptionsGo_area (rest.length + 1) rest os hos'
     · show printFixed f ++ printOptions os
-        = bs.take 240 ++ printOptions os
-      rw [htake]
+        = bs.take 240 ++ canonArea os
+      rw [htake, printOptions_eq_canonArea]
   · rw [ite_eq_right hc] at h
     simp at h
 

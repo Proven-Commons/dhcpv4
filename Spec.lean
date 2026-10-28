@@ -11,7 +11,8 @@
   `bar.toml`, in `Dhcp/Value.lean` and `Dhcp/Parse.lean`, and
   the definitions in `Spec/Defs.lean`, part of the
   specification: the option area grammar `OptionArea`, the
-  rules `FixedRules` and `TypeRule`, and `WF` and its parts.
+  canonical option area `canonArea`, the rules `FixedRules`
+  and `TypeRule`, and `WF` and its parts.
 -/
 
 import Dhcp
@@ -36,17 +37,21 @@ theorem Spec.parse_print {m : Message} (hw : WF m) :
     first 240 are an option area that the grammar
     `OptionArea` derives, carrying exactly the options of the
     message; and the print is the first 240 bytes as they
-    stood, then those options printed, which is the canonical
-    option area: pad bytes dropped, zero padding after the
-    end byte dropped, and exactly one end byte. So the parser
-    takes no input whose option area breaks the grammar, such
-    as one with a code byte and no length byte after it, a
-    length that runs past the end, or a nonzero byte after
-    the end byte. -/
+    stood, then `canonArea` of those options, the canonical
+    option area: each option as its code byte, its length
+    byte, and its value bytes, then exactly one end byte, with
+    no pad bytes and nothing after the end byte. `canonArea`
+    is a spec definition, not the printer, so a printer that
+    wrote pad bytes, left out the end byte, or wrote zeros
+    after it, for a message the parser took, fails this
+    statement. And the parser takes no input whose option
+    area breaks the grammar, such as one with a code byte and
+    no length byte after it, a length that runs past the end,
+    or a nonzero byte after the end byte. -/
 theorem Spec.print_parse {bs : List UInt8} {m : Message}
     (h : parse bs = some m) :
     OptionArea (bs.drop 240) m.options ∧
-      print m = bs.take 240 ++ printOptions m.options :=
+      print m = bs.take 240 ++ canonArea m.options :=
   sorry
 
 /-! ## Soundness

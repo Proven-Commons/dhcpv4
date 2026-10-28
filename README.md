@@ -13,7 +13,8 @@ DHCPv6.
 The statements a reviewer approves are in `Spec.lean`,
 with the definitions they use in `Spec/Defs.lean` (the
 rules an input must follow, the option area grammar among
-them, and what a well formed message is) and their proofs
+them, the canonical option area, and what a well formed
+message is) and their proofs
 in `Proofs/SpecProofs.lean`.
 No reviewer has approved them yet, so this project is not
 called verified.
@@ -75,7 +76,7 @@ byte request in the example above.
 | Claim | Theorem |
 |-------|---------|
 | Parsing the printed form of a well formed message gives the message back. | `Spec.parse_print` |
-| The option area of every input the parser takes, the bytes after the first 240, is one the option area grammar derives, carrying exactly the options of the parsed message; and printing that message gives the canonical form of the input: the first 240 bytes as they stood, then those options printed. | `Spec.print_parse` |
+| The option area of every input the parser takes, the bytes after the first 240, is one the option area grammar derives, carrying exactly the options of the parsed message; and printing that message gives the canonical form of the input: the first 240 bytes as they stood, then the canonical option area carrying those options (`canonArea` in `Spec/Defs.lean`), which is each option, in order, as its code byte, its length byte, and its value bytes, then exactly one end byte, with no pad bytes and nothing after the end byte. | `Spec.print_parse` |
 | Every message the parser takes is well formed, in the sense below. This is about the message it returns; a parser that refuses everything also meets it, and `Spec.parse_print` rules that parser out. | `Spec.parse_wf` |
 | The parser takes an input exactly when it follows the rules of `SPEC.md`: at least 240 bytes, op 1 or 2, hlen at most 16, and the cookie at bytes 236 to 239; an option area after them that the grammar derives; and option 53 once among the options that area carries, with a one byte value from 1 to 8. So it turns away every input that breaks a rule, takes every input that follows them all, and reads from it the options the grammar derives. | `Spec.parse_accepts_iff` |
 | Example, one input: the test DISCOVER cut to 239 bytes is refused. The fixed fields and the cookie need 240. | `Spec.rejects_short_message` |
@@ -114,8 +115,16 @@ The canonical form of a message keeps the first 240 bytes
 (the fixed fields and the cookie) as they stood, writes
 the options with pad bytes dropped and zero padding after
 the end byte dropped, and writes exactly one end byte,
-supplying one when the input had none: the printed form
-of the options the grammar reads from the area.
+supplying one when the input had none: the canonical
+option area carrying the options the grammar reads from
+the area. That area is `canonArea` in `Spec/Defs.lean`,
+written apart from the printer: each option, in order, as
+its code byte, its length byte, and its value bytes, then
+exactly one end byte, 255. `Spec.print_parse` states the
+print with `canonArea`, not with the printer's own option
+writer, so a printer that wrote pad bytes, left out the
+end byte, or wrote zeros after it, for a message the
+parser took, would fail it.
 
 The round trip and soundness theorems rest on the proofs
 in `Proofs/RoundTrip.lean`, where they are
@@ -132,8 +141,9 @@ are single inputs checked in the kernel with
 proved one by one in the same file: the two and four byte
 numbers both ways, the readers on printed forms and on
 read forms, the fixed fields both ways, the option reader
-on printed options, and the lemma that every option area
-the reader takes is one the grammar derives, with the
+on printed options, the lemma that the printer writes the
+options as `canonArea`, and the lemma that every option
+area the reader takes is one the grammar derives, with the
 options it read. Under the soundness theorem, three lemmas
 there say that read fixed fields are well formed, that
 every option read has a code from 1 to 254 and a value of
@@ -149,10 +159,11 @@ are about.
 
 ## What is not proved
 
-- That `FixedRules`, `OptionArea` and `TypeRule` in
-  `Spec/Defs.lean` say what the rules in `SPEC.md` say in
-  words. `Spec.parse_accepts_iff` holds the parser to the
-  Lean rules; that they are the rules on the page is a
+- That `FixedRules`, `OptionArea`, `TypeRule` and
+  `canonArea` in `Spec/Defs.lean` say what `SPEC.md` says
+  in words. `Spec.parse_accepts_iff` and
+  `Spec.print_parse` hold the parser and printer to the
+  Lean definitions; that these say what the page says is a
   reading, which the reviewer checks and the differential
   tests in `tests/` probe from the other side, with an
   oracle written from the words.

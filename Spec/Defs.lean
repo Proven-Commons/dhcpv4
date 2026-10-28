@@ -9,8 +9,11 @@
 
   - `OptionArea`: the grammar of an option area, which
     `Spec.print_parse` and `Spec.parse_accepts_iff` are
-    stated with. The canonical form of an area is the printed
-    form of the options it derives.
+    stated with.
+  - `canonArea`: the canonical option area carrying a list of
+    options, which `Spec.print_parse` is stated with. The
+    canonical form of an area is the canonical area carrying
+    the options it derives.
   - `FixedRules` and `TypeRule`: the fixed field rules on the
     first 240 bytes, and the option 53 rule on the options,
     which `Spec.parse_accepts_iff` is stated with.
@@ -54,6 +57,17 @@ inductive OptionArea : List UInt8 → List DhcpOption → Prop where
       (hlen : value.length = len.toNat) (h : OptionArea rest os) :
       OptionArea (code :: len :: (value ++ rest))
         ((code.toNat, value) :: os)
+
+/-- The canonical option area carrying the options `os`, as
+    `SPEC.md` (Printing and the canonical form) writes it:
+    each option, in order, as its code byte, its length byte,
+    and its value bytes, then exactly one end byte, 255. It
+    holds no pad bytes, and nothing follows the end byte. It
+    is written here, apart from the printer, so that
+    `Spec.print_parse` pins the bytes the printer writes. -/
+def canonArea (os : List DhcpOption) : List UInt8 :=
+  os.flatMap (fun o => o.1.toUInt8 :: o.2.length.toUInt8 :: o.2) ++
+    [255]
 
 /-- The rules of `SPEC.md` (The fixed fields) on the bytes
     before the option area: there are at least 240 bytes; op,
