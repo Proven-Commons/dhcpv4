@@ -27,9 +27,9 @@ theorem Spec.parse_wf {bs : List UInt8} {m : Message}
     (h : parse bs = some m) : WF m :=
   Dhcp.Proofs.parse_wf h
 
-/-- A message of 239 bytes is refused: the fixed fields
-    and the cookie need 240, so the message is cut short
-    inside the cookie. This is the harness's short-239
+/-- Example, one input: a message of 239 bytes is refused.
+    The fixed fields and the cookie need 240, so the message
+    is cut short inside the cookie. This is the harness's short-239
     case, the DISCOVER below with its last byte cut off. -/
 theorem Spec.rejects_short_message :
     (parse ([      1, 1, 6, 0, 18, 52, 86, 120, 0, 0,
@@ -60,8 +60,8 @@ theorem Spec.rejects_short_message :
   decide +kernel
 
 
-/-- A message whose third cookie byte is wrong is refused:
-    the cookie must be 99, 130, 83, 99. This is the
+/-- Example, one input: a message whose third cookie byte
+    is wrong is refused. The cookie must be 99, 130, 83, 99. This is the
     harness's wrong-cookie case. -/
 theorem Spec.rejects_wrong_cookie :
     (parse ([      1, 1, 6, 0, 18, 52, 86, 120, 0, 0,
@@ -93,9 +93,9 @@ theorem Spec.rejects_wrong_cookie :
   decide +kernel
 
 
-/-- An option whose length runs past the end of the message
-    is refused: here option 55 claims ten value bytes and
-    only three stand. This is the harness's
+/-- Example, one input: an option whose length runs past
+    the end of the message is refused. Here option 55 claims
+    ten value bytes and only three stand. This is the harness's
     option-overrun case. -/
 theorem Spec.rejects_option_overrun :
     (parse ([      1, 1, 6, 0, 18, 52, 86, 120, 0, 0,
@@ -127,8 +127,8 @@ theorem Spec.rejects_option_overrun :
   decide +kernel
 
 
-/-- A message with no option 53 is refused: the message
-    type must stand in the list. This is the harness's
+/-- Example, one input: a message with no option 53 is
+    refused. The message type must stand in the list. This is the harness's
     no-option-53 case. -/
 theorem Spec.rejects_no_option_53 :
     (parse ([      1, 1, 6, 0, 18, 52, 86, 120, 0, 0,
@@ -160,8 +160,8 @@ theorem Spec.rejects_no_option_53 :
   decide +kernel
 
 
-/-- An option 53 of length 2 is refused: its length must
-    be 1. This is the harness's option-53-length-2 case. -/
+/-- Example, one input: an option 53 of length 2 is
+    refused. Its length must be 1. This is the harness's option-53-length-2 case. -/
 theorem Spec.rejects_option_53_length_2 :
     (parse ([      1, 1, 6, 0, 18, 52, 86, 120, 0, 0,
       128, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -192,8 +192,8 @@ theorem Spec.rejects_option_53_length_2 :
   decide +kernel
 
 
-/-- An option 53 with value 0 is refused: the value must
-    run from 1 to 8. This is the harness's
+/-- Example, one input: an option 53 with value 0 is
+    refused. The value must run from 1 to 8. This is the harness's
     option-53-value-0 case. -/
 theorem Spec.rejects_option_53_value_0 :
     (parse ([      1, 1, 6, 0, 18, 52, 86, 120, 0, 0,
@@ -225,8 +225,8 @@ theorem Spec.rejects_option_53_value_0 :
   decide +kernel
 
 
-/-- An option 53 with value 9 is refused: the value must
-    run from 1 to 8. Value 9 is a registered message type,
+/-- Example, one input: an option 53 with value 9 is
+    refused. The value must run from 1 to 8. Value 9 is a registered message type,
     DHCPFORCERENEW (RFC 3203). This slice refuses it on
     purpose, as it does the other registered types 10 to 18,
     since the plan covers types 1 to 8 only. This is the
@@ -261,8 +261,8 @@ theorem Spec.rejects_option_53_value_9 :
   decide +kernel
 
 
-/-- A message with two option 53 items is refused: the
-    message type stands exactly once. This is the
+/-- Example, one input: a message with two option 53 items
+    is refused. The message type stands exactly once. This is the
     harness's option-53-twice case. -/
 theorem Spec.rejects_option_53_twice :
     (parse ([      1, 1, 6, 0, 18, 52, 86, 120, 0, 0,
@@ -294,7 +294,8 @@ theorem Spec.rejects_option_53_twice :
   decide +kernel
 
 
-/-- A message with op 3 is refused: op must be 1 or 2.
+/-- Example, one input: a message with op 3 is refused. op
+    must be 1 or 2.
     This is the harness's op-3 case, the DISCOVER with
     its first byte set to 3. -/
 theorem Spec.rejects_op_3 :
@@ -327,9 +328,9 @@ theorem Spec.rejects_op_3 :
   decide +kernel
 
 
-/-- A message with hlen 17 is refused: a hardware address
-    longer than the sixteen byte chaddr field cannot
-    fit. This is the harness's hlen-17 case. -/
+/-- Example, one input: a message with hlen 17 is refused.
+    A hardware address longer than the sixteen byte chaddr
+    field cannot fit. This is the harness's hlen-17 case. -/
 theorem Spec.rejects_hlen_17 :
     (parse ([      1, 1, 17, 0, 18, 52, 86, 120, 0, 0,
       128, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -360,8 +361,8 @@ theorem Spec.rejects_hlen_17 :
   decide +kernel
 
 
-/-- A nonzero byte after the end byte is refused: only
-    zero padding may follow it. This is a choice, stricter
+/-- Example, one input: a nonzero byte after the end byte
+    is refused. Only zero padding may follow it. This is a choice, stricter
     than RFC 2132 section 3.2, which says only that the bytes
     after the end option should be pad bytes. This is the
     harness's nonzero-after-end case, the DISCOVER with a 1

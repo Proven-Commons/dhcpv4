@@ -1,6 +1,6 @@
 # dhcpv4: a DHCPv4 wire message parser and printer, with proved round trips
 
-Status: in-progress
+Status: in progress
 
 A parser and printer for DHCPv4 wire messages, in Lean,
 following RFC 2131 (the message format) and RFC 2132 (the
@@ -62,24 +62,29 @@ Each claim below names the theorem behind it. The
 theorems are stated in `Spec.lean` (the challenge file,
 where they end in `sorry`) and proved in
 `Proofs/SpecProofs.lean`, under the same names.
-`comparator.json` lists all of them.
+`comparator.json` lists all of them. The first three are
+general: each holds for every message or input it names.
+Each row that starts "Example, one input" is proved for
+that one input only: it shows the rule on a case, and does
+not prove the rule in general. The test DISCOVER is the
+250 byte request in the example above.
 
 | Claim | Theorem |
 |-------|---------|
 | Parsing the printed form of a well formed message gives the message back. | `Spec.parse_print` |
 | Printing a message the parser took gives the canonical form of the bytes it was read from: the first 240 bytes as they stood, then the canonical option area. | `Spec.print_parse` |
 | Every message the parser takes is well formed, in the sense below. This is about the message it returns; a parser that refuses everything also meets it, and `Spec.parse_print` rules that parser out. | `Spec.parse_wf` |
-| A message of 239 bytes is refused: the fixed fields and the cookie need 240. | `Spec.rejects_short_message` |
-| A message with a wrong magic cookie is refused: the cookie must be 99, 130, 83, 99. | `Spec.rejects_wrong_cookie` |
-| An option whose length runs past the end of the message is refused. | `Spec.rejects_option_overrun` |
-| A message with no option 53, the message type, is refused. | `Spec.rejects_no_option_53` |
-| An option 53 of length 2 is refused: its length must be 1. | `Spec.rejects_option_53_length_2` |
-| An option 53 with value 0 is refused: the value must run from 1 to 8. | `Spec.rejects_option_53_value_0` |
-| An option 53 with value 9 is refused: the value must run from 1 to 8. Value 9 is DHCPFORCERENEW (RFC 3203), a registered type this slice refuses on purpose. | `Spec.rejects_option_53_value_9` |
-| A message with two option 53 items is refused: the message type stands exactly once. | `Spec.rejects_option_53_twice` |
-| A message with op 3 is refused: op must be 1 or 2. | `Spec.rejects_op_3` |
-| A message with hlen 17 is refused: the hardware address cannot be longer than the chaddr field. | `Spec.rejects_hlen_17` |
-| A nonzero byte after the end byte is refused: only zero padding may follow it. This is stricter than RFC 2132 section 3.2, which says only that those bytes should be pad bytes. | `Spec.rejects_nonzero_after_end` |
+| Example, one input: the test DISCOVER cut to 239 bytes is refused. The fixed fields and the cookie need 240. | `Spec.rejects_short_message` |
+| Example, one input: the test DISCOVER with its third cookie byte set to 100 is refused. The cookie must be 99, 130, 83, 99. | `Spec.rejects_wrong_cookie` |
+| Example, one input: a message whose option 55 claims ten value bytes, with three left, is refused. | `Spec.rejects_option_overrun` |
+| Example, one input: a message with option 55 and no option 53, the message type, is refused. | `Spec.rejects_no_option_53` |
+| Example, one input: a message whose only option 53 has length 2 is refused. Its length must be 1. | `Spec.rejects_option_53_length_2` |
+| Example, one input: a message whose only option 53 has value 0 is refused. The value must run from 1 to 8. | `Spec.rejects_option_53_value_0` |
+| Example, one input: a message whose only option 53 has value 9 is refused. Value 9 is DHCPFORCERENEW (RFC 3203), a registered type this slice refuses on purpose. | `Spec.rejects_option_53_value_9` |
+| Example, one input: a message with two option 53 items, both DISCOVER, is refused. The message type stands exactly once. | `Spec.rejects_option_53_twice` |
+| Example, one input: the test DISCOVER with op 3 is refused. op must be 1 or 2. | `Spec.rejects_op_3` |
+| Example, one input: the test DISCOVER with hlen 17 is refused. The hardware address cannot be longer than the chaddr field. | `Spec.rejects_hlen_17` |
+| Example, one input: the test DISCOVER with a 1 after its end byte is refused. Only zero padding may follow the end byte, a choice stricter than RFC 2132 section 3.2, which says only that those bytes should be pad bytes. | `Spec.rejects_nonzero_after_end` |
 
 A message is well formed when op is 1 or 2, htype and hops
 fit one byte, hlen is at most 16, xid and the four

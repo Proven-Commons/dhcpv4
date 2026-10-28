@@ -232,22 +232,25 @@ proofs in `Proofs/RoundTrip.lean`, where they are
 `Dhcp.Proofs.parse_print`, `Dhcp.Proofs.print_parse`, and
 `Dhcp.Proofs.parse_wf`.
 The refusal theorems are single inputs, one for each named
-rejection case in the test harness; the tests in `tests/`
-cover each rule on many more inputs.
+rejection case in the test harness, so each row that starts
+"Example, one input" is proved for that input only, not as
+a general rule; the tests in `tests/` cover each rule on
+many more inputs. The test DISCOVER is the harness's
+DISCOVER, the 250 byte example request in `README.md`.
 
 | Property | Theorem |
 |----------|---------|
 | Parsing the printed form of a well formed message gives the message back | `Spec.parse_print` |
 | Printing a message the parser took gives the canonical form of the bytes it was read from | `Spec.print_parse` |
 | Every message the parser takes is well formed | `Spec.parse_wf` |
-| A message shorter than 240 bytes is refused | `Spec.rejects_short_message` |
-| A message with a wrong magic cookie is refused | `Spec.rejects_wrong_cookie` |
-| An option length that runs past the end of the message is refused | `Spec.rejects_option_overrun` |
-| A message without option 53 is refused | `Spec.rejects_no_option_53` |
-| An option 53 of length 2 is refused | `Spec.rejects_option_53_length_2` |
-| An option 53 with value 0 is refused | `Spec.rejects_option_53_value_0` |
-| An option 53 with value 9 is refused | `Spec.rejects_option_53_value_9` |
-| A message with two option 53 items is refused | `Spec.rejects_option_53_twice` |
-| A message with op 3 is refused | `Spec.rejects_op_3` |
-| A message with hlen 17 is refused | `Spec.rejects_hlen_17` |
-| A nonzero byte after the end byte is refused | `Spec.rejects_nonzero_after_end` |
+| Example, one input: the test DISCOVER cut to 239 bytes is refused | `Spec.rejects_short_message` |
+| Example, one input: the test DISCOVER with its third cookie byte set to 100 is refused | `Spec.rejects_wrong_cookie` |
+| Example, one input: a message whose option 55 claims ten value bytes, with three left, is refused | `Spec.rejects_option_overrun` |
+| Example, one input: a message with option 55 and no option 53 is refused | `Spec.rejects_no_option_53` |
+| Example, one input: a message whose only option 53 has length 2 is refused | `Spec.rejects_option_53_length_2` |
+| Example, one input: a message whose only option 53 has value 0 is refused | `Spec.rejects_option_53_value_0` |
+| Example, one input: a message whose only option 53 has value 9, DHCPFORCERENEW, is refused | `Spec.rejects_option_53_value_9` |
+| Example, one input: a message with two option 53 items is refused | `Spec.rejects_option_53_twice` |
+| Example, one input: the test DISCOVER with op 3 is refused | `Spec.rejects_op_3` |
+| Example, one input: the test DISCOVER with hlen 17 is refused | `Spec.rejects_hlen_17` |
+| Example, one input: the test DISCOVER with a 1 after its end byte is refused | `Spec.rejects_nonzero_after_end` |
