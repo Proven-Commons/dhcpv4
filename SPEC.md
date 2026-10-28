@@ -78,6 +78,7 @@ The readings for the ends of the list:
   message away: the value bytes are not there to read.
 - A code byte with no length byte after it, a code at the
   very last byte, turns the message away.
+  `Spec.rejects_code_last_byte` pins this on one input.
 - An option area may be empty of items (the input ends at
   the cookie, or an end byte follows the cookie at once),
   but see the option 53 rule below: such a message is turned
@@ -204,10 +205,15 @@ parser out.
 That the parser accepts every message these rules allow is
 not proved. That it turns away every message they forbid is
 proved only as far as `Spec.parse_wf` reaches: whatever it
-returns is well formed. Single refusals, one for each
-headline rule above, are pinned as theorems
+returns is well formed. Single refusals, one for each rule
+above that turns a message away, are pinned as theorems
 (`Spec.rejects_*` in the table below), each on one concrete
-input from the test harness. The differential tests in
+input from the test harness: the 240 byte minimum, the
+cookie, op, hlen, a nonzero byte after the end byte, a
+length that runs past the end, a code byte with no length
+byte, and the four option 53 rules. The readings that take
+an input, such as an option area with no end byte or with
+no items, have no theorem. The differential tests in
 `tests/` check the behaviour on many more inputs.
 
 ## The command-line tool
@@ -246,6 +252,7 @@ example request in `README.md`.
 | Example, one input: the test DISCOVER cut to 239 bytes is refused | `Spec.rejects_short_message` |
 | Example, one input: the test DISCOVER with its third cookie byte set to 100 is refused | `Spec.rejects_wrong_cookie` |
 | Example, one input: a message whose option 55 claims ten value bytes, with three left, is refused | `Spec.rejects_option_overrun` |
+| Example, one input: a message whose last byte is the code of option 55, with no length byte after it, is refused | `Spec.rejects_code_last_byte` |
 | Example, one input: a message with option 55 and no option 53 is refused | `Spec.rejects_no_option_53` |
 | Example, one input: a message whose only option 53 has length 2 is refused | `Spec.rejects_option_53_length_2` |
 | Example, one input: a message whose only option 53 has value 0 is refused | `Spec.rejects_option_53_value_0` |

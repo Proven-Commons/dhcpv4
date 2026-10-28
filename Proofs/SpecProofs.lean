@@ -127,6 +127,40 @@ theorem Spec.rejects_option_overrun :
   decide +kernel
 
 
+/-- Example, one input: a code byte with no length byte
+    after it is refused. Here the code of option 55 is the
+    last byte of the message, so its length byte is missing.
+    This is the harness's code-last-byte case. -/
+theorem Spec.rejects_code_last_byte :
+    (parse ([      1, 1, 6, 0, 18, 52, 86, 120, 0, 0,
+      128, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 11,
+      130, 1, 252, 66, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 99, 130, 83, 99,
+      53, 1, 1, 55]
+      : List UInt8)).isSome = false := by
+  decide +kernel
+
+
 /-- Example, one input: a message with no option 53 is
     refused. The message type must stand in the list. This is the harness's
     no-option-53 case. -/

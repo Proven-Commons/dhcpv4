@@ -61,8 +61,8 @@ theorem Spec.parse_wf {bs : List UInt8} {m : Message}
 
 /-! ## Refused inputs
 
-Single inputs the parser refuses, one for each headline rule
-of `SPEC.md`. Each input is one of the named rejection cases
+Single inputs the parser refuses, one for each rule of
+`SPEC.md` that turns a message away. Each input is one of the named rejection cases
 in the test harness, built there byte by byte from its
 DISCOVER message, and stands here byte for byte the same.
 The differential tests cover these rules on many more
@@ -164,6 +164,39 @@ theorem Spec.rejects_option_overrun :
       0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
       0, 0, 0, 0, 0, 0, 99, 130, 83, 99,
       53, 1, 1, 55, 10, 1, 3, 6]
+      : List UInt8)).isSome = false := sorry
+
+
+/-- Example, one input: a code byte with no length byte
+    after it is refused. Here the code of option 55 is the
+    last byte of the message, so its length byte is missing.
+    This is the harness's code-last-byte case. -/
+theorem Spec.rejects_code_last_byte :
+    (parse ([      1, 1, 6, 0, 18, 52, 86, 120, 0, 0,
+      128, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 11,
+      130, 1, 252, 66, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 99, 130, 83, 99,
+      53, 1, 1, 55]
       : List UInt8)).isSome = false := sorry
 
 

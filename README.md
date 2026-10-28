@@ -77,6 +77,7 @@ not prove the rule in general. The test DISCOVER is the
 | Example, one input: the test DISCOVER cut to 239 bytes is refused. The fixed fields and the cookie need 240. | `Spec.rejects_short_message` |
 | Example, one input: the test DISCOVER with its third cookie byte set to 100 is refused. The cookie must be 99, 130, 83, 99. | `Spec.rejects_wrong_cookie` |
 | Example, one input: a message whose option 55 claims ten value bytes, with three left, is refused. | `Spec.rejects_option_overrun` |
+| Example, one input: a message whose last byte is the code of option 55, with no length byte after it, is refused. | `Spec.rejects_code_last_byte` |
 | Example, one input: a message with option 55 and no option 53, the message type, is refused. | `Spec.rejects_no_option_53` |
 | Example, one input: a message whose only option 53 has length 2 is refused. Its length must be 1. | `Spec.rejects_option_53_length_2` |
 | Example, one input: a message whose only option 53 has value 0 is refused. The value must run from 1 to 8. | `Spec.rejects_option_53_value_0` |
@@ -137,9 +138,11 @@ are about.
   themselves, such as the cookie, the zero bytes after the
   end byte, and a code byte with no length byte, are
   pinned by the refusal theorems on one input each, not in
-  general. The differential tests in `tests/` check that
-  behaviour instead, and the results file records the
-  outcome, including any failure.
+  general. The readings that take an input, such as an
+  option area with no end byte, have no theorem at all.
+  The differential tests in `tests/` check that behaviour
+  instead, and the results file records the outcome,
+  including any failure.
 - A capture based differential, and a differential
   against an outside decoder. The plan names ISC DHCP and
   dnsmasq captures and the Wireshark dissectors as
