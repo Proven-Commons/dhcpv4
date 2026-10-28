@@ -43,14 +43,18 @@ message the parser turns away, such as the single code
 `1`, answers `none`. See `SPEC.md` for the full protocol.
 
 `python3 tests/run_tests.py` rebuilds the tool, runs the
-fixed cases, the differential run against the harness
-oracle, the Scapy cross check when Scapy is reachable, and
-the mutation and malformed cases, and writes the outcome
-to `tests/TEST-RESULTS.md`. The Scapy cross check uses
-Scapy from the interpreter running the harness, or from
-the virtual environment at `venv/` beside the harness; to
-rebuild that venv, run `python3 -m venv venv` here and
-`venv/bin/pip install scapy`.
+fixed cases, the README example above, the cases for the
+readings that depart from the RFCs, the differential run
+against the harness oracle, the Scapy cross check, and the
+mutation and malformed cases, and writes the outcome to
+`tests/TEST-RESULTS.md`. The Scapy cross check feeds the
+packets stored in `tests/scapy-packets.txt`, which Scapy
+built, so it runs the same with or without Scapy
+installed. To build them again,
+`python3 tests/run_tests.py --rebuild-scapy` uses Scapy
+from the interpreter running the harness, or from the
+virtual environment at `venv/` here; to make that venv, run
+`python3 -m venv venv` and `venv/bin/pip install scapy`.
 
 ## What is proved
 
@@ -127,10 +131,13 @@ are about.
   general. The differential tests in `tests/` check that
   behaviour instead, and the results file records the
   outcome, including any failure.
-- A capture based differential. The plan names ISC DHCP
-  and dnsmasq captures as oracles. No captures are
-  available in this environment, so no capture corpus ran,
-  and nothing in the results rests on one. The outside
+- A capture based differential, and a differential
+  against an outside decoder. The plan names ISC DHCP and
+  dnsmasq captures and the Wireshark dissectors as
+  oracles. No captures are available in this environment,
+  so no capture corpus ran, and no Wireshark dissector
+  judged any input; nothing in the results rests on
+  either. The outside
   bytes in the tests came from Scapy, which built packets
   with its BOOTP and DHCP layers; the harness oracle
   settled every verdict on them.
@@ -210,10 +217,11 @@ are about.
    accepted by Lean's kernel and every other kernel
    shipped with Lean.
 2. `python3 tests/run_tests.py`: the fixed cases, the
-   differential against the harness oracle, the Scapy
-   cross check when Scapy is reachable, and the mutation
-   and malformed cases, with counts and any failures
-   written to `tests/TEST-RESULTS.md`.
+   README example, the cases for the readings that depart
+   from the RFCs, the differential against the harness
+   oracle, the Scapy cross check, and the mutation and
+   malformed cases, with the seed, the input count and any
+   failures written to `tests/TEST-RESULTS.md`.
 3. `lake build`: the library, the proofs, and the tool
    build clean, and `lake env lean Proofs/Verify.lean`
    prints the axiom list for the round trip theorems.

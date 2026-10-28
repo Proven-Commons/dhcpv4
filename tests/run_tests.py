@@ -16,6 +16,43 @@ Four parts.
    field, an empty input, and an option area with nothing the
    message type rule can use).
 
+2. A differential run against a strict Python oracle written
+   in this harness from the rules in SPEC.md: random well
+   formed messages, some with pad bytes sprinkled among the
+   options, some with zero padding after the end byte, some
+   with no end byte; random raw byte strings; random option
+   areas behind a fixed part and the cookie, built to reach
+   the edges of the option reader (option 53 missing,
+   repeated, of length 0 or 2, or of any value; option 52;
+   options in file and sname; bytes after the end byte; no
+   end byte; a lone code byte; an option running past the
+   end); and mutations of one rich message (every
+   truncation, every single byte flip, and targeted
+   changes).
+
+3. A Scapy cross check: packets built with Scapy's BOOTP and
+   DHCP layers, each fed to the tool and to the oracle; the
+   tool must agree with the oracle on each one. Scapy is only
+   a source of independently built bytes here; the oracle
+   settles every verdict. The packets are stored in
+   tests/scapy-packets.txt with the Scapy version that built
+   them, so every run feeds the same inputs whether or not
+   Scapy is installed; `--rebuild-scapy` rebuilds the file
+   with Scapy from this interpreter or from the project venv
+   at ../venv. No ISC DHCP or dnsmasq captures were available
+   in this environment, so no capture corpus was run; the
+   record says so too.
+
+4. Malformed request lines must be answered `error`.
+
+Two more line checks stand apart from the fixed cases of
+part 1: the requests `parse ` and `parse`, with no codes,
+must be answered `none` (the empty message is turned away).
+The results file counts them on their own line, not as
+fixed cases. So is the example request in README.md: the
+harness reads it from the page, runs it, and checks that the
+answer is `ok:` and the same codes, as the page says.
+
 The readings SPEC.md lists as departing from the RFCs each
 have a case too (no end byte, bytes after the end byte,
 option 52 with a second option 53 in file or sname, a
@@ -29,37 +66,8 @@ message, as `Spec.parse_wf` says: op 1 or 2, hlen at most
 16, the cookie at offset 236, codes from 1 to 254, and option
 53 exactly once with a value from 1 to 8.
 
-2. A differential run against a strict Python oracle written
-   in this harness from the rules in SPEC.md: random well
-   formed messages, some with pad bytes sprinkled among the
-   options, some with zero padding after the end byte, some
-   with no end byte; random raw byte strings; and mutations
-   of one rich message (every truncation, every single byte
-   flip, and targeted changes).
-
-3. A Scapy cross check: packets built with Scapy's BOOTP and
-   DHCP layers (Scapy 2.8.0), each fed to the tool and to the
-   oracle; the tool must agree with the oracle on each one.
-   Scapy is only a source of independently built bytes here;
-   the oracle settles every verdict. When Scapy is not
-   importable by this interpreter, the harness looks for the
-   project venv at ../venv and uses its interpreter to build
-   the packets. When neither works, the run says so on the
-   record. No ISC DHCP or dnsmasq captures were available in
-   this environment, so no capture corpus was run; the record
-   says so too.
-
-4. Malformed request lines must be answered `error`.
-
-Two more line checks stand apart from the fixed cases of
-part 1: the requests `parse ` and `parse`, with no codes,
-must be answered `none` (the empty message is turned away).
-The results file counts them on their own line, not as
-fixed cases. So is the example request in README.md: the
-harness reads it from the page, runs it, and checks that the
-answer is `ok:` and the same codes, as the page says.
-
     python3 tests/run_tests.py [--seed N] [--count N]
+        [--raw-count N] [--area-count N] [--rebuild-scapy]
 
 The tool is driven one batch process per chunk of requests,
 input written and closed, output drained until the process
@@ -619,21 +627,102 @@ def run_readme():
 
 
 def run_random(seed, valid_count, raw_count):
-    tally = Tally()
+    """The random well formed messages and the random raw byte
+    strings, from one generator seeded with `seed`. Returns a
+    tally for each."""
+    valid, raw = Tally(), Tally()
     rng = random.Random(seed)
     docs = [random_message(rng) for _ in range(valid_count)]
     answers, problems = ask_all([request(d) for d in docs])
-    tally.failures += problems
+    valid.failures += problems
     for i, (data, answer) in enumerate(zip(docs, answers)):
-        tally.check(data, answer, f"random valid {i}")
+        valid.check(data, answer, f"random valid {i}")
     raws = []
     for _ in range(raw_count):
         n = rng.randint(0, 340)
         raws.append(bytes(rng.randrange(256) for _ in range(n)))
     answers, problems = ask_all([request(d) for d in raws])
-    tally.failures += problems
+    raw.failures += problems
     for i, (data, answer) in enumerate(zip(raws, answers)):
-        tally.check(data, answer, f"random raw {i}")
+        raw.check(data, answer, f"random raw {i}")
+    return valid, raw
+
+
+def random_area_message(rng):
+    """A fixed part, the cookie, and an option area built to
+    reach the edges of the option reader: zero, one, or two
+    option 53 items of length 0 to 2 with any value, option 52
+    with values 0 to 4, pad bytes between items, and one of
+    seven endings (the end byte; the end byte and zeros; the
+    end byte and other bytes; no end byte; a lone code byte; an
+    option whose length runs past the end; the end byte, a
+    zero, and a nonzero byte). A quarter of them carry a second
+    option 53 in file, and some in sname, as option 52 would
+    announce. One in ten has an op or hlen at the edge of its
+    rule."""
+    op, hlen = rng.choice([1, 2]), rng.choice([0, 6, 16])
+    if rng.random() < 0.1:
+        op = rng.choice([0, 1, 2, 3, 255])
+        hlen = rng.choice([6, 16, 17, 255])
+    sname, file = ZEROS64, ZEROS128
+    if rng.random() < 0.25:
+        fo = bytes([53, 1, rng.randint(1, 18), 255])
+        file = fo + bytes(128 - len(fo))
+    if rng.random() < 0.15:
+        so = bytes([53, 1, rng.randint(1, 18), 255])
+        sname = so + bytes(64 - len(so))
+    f = fixed_bytes(op, 1, hlen, 0, rng.randrange(2**32), 0, 0,
+                    0, 0, 0, 0, MAC, sname, file)
+    items = []
+    for _ in range(rng.choices([0, 1, 2], weights=[1, 6, 2])[0]):
+        ln = rng.choices([0, 1, 2], weights=[1, 8, 1])[0]
+        items.append((53, bytes(rng.randint(1, 8) if rng.random() < 0.8
+                                else rng.randrange(256)
+                                for _ in range(ln))))
+    for _ in range(rng.randint(0, 5)):
+        c = rng.choice([rng.randint(1, 254), 52, 55, 12, 61])
+        if c == 52:
+            v = bytes([rng.randint(0, 4)])
+        else:
+            v = bytes(rng.randrange(256) for _ in range(rng.randint(0, 12)))
+        items.append((c, v))
+    rng.shuffle(items)
+    area = bytearray()
+    for c, v in items:
+        area += bytes(rng.choice([0, 0, 0, 1, 2]))
+        area += bytes([c, len(v)]) + v
+    ending = rng.randrange(7)
+    if ending == 0:
+        area.append(255)
+    elif ending == 1:
+        area.append(255)
+        area += bytes(rng.randint(1, 30))
+    elif ending == 2:
+        area.append(255)
+        area += bytes(rng.randrange(256) for _ in range(rng.randint(1, 8)))
+    elif ending == 3:
+        pass
+    elif ending == 4:
+        area.append(rng.randint(1, 254))
+    elif ending == 5:
+        area += bytes([rng.randint(1, 254), rng.randint(1, 40)])
+        area += bytes(rng.randrange(256) for _ in range(rng.randint(0, 3)))
+    else:
+        area += bytes([255, 0, rng.randint(1, 255)])
+    return f + COOKIE + bytes(area)
+
+
+def run_areas(seed, count):
+    """Random option areas, from a generator of their own seeded
+    from `seed`, so the other random runs keep their inputs."""
+    tally = Tally()
+    rng = random.Random(seed + 1)
+    docs = [random_area_message(rng) for _ in range(count)]
+    tally.taken = sum(1 for d in docs if oracle_parse(d) is not None)
+    answers, problems = ask_all([request(d) for d in docs])
+    tally.failures += problems
+    for i, (data, answer) in enumerate(zip(docs, answers)):
+        tally.check(data, answer, f"option area {i}")
     return tally
 
 
@@ -740,6 +829,8 @@ jobs = [
                   ("domain_name_server", "10.0.0.2"), "end"]),
 ]
 
+import scapy
+sys.stdout.write("version " + scapy.__version__ + "\n")
 for job in jobs:
     pkt = build(**job)
     if pkt is not None:
@@ -747,41 +838,71 @@ for job in jobs:
 '''
 
 
-def scapy_packets():
-    """Packets built by Scapy, or None when Scapy is reachable
-    neither in this interpreter nor in the project venv.
-    Returns (packets, how) where how says where Scapy ran."""
-    try:
-        import scapy  # noqa: F401
+SCAPY_FIXTURE = ROOT / "tests" / "scapy-packets.txt"
 
-        scapy_here = True
-    except ImportError:
-        scapy_here = False
-    if scapy_here:
-        proc = subprocess.run(
-            [sys.executable, "-c", SCAPY_SCRIPT],
-            capture_output=True, text=True, timeout=300,
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            pkts = [bytes.fromhex(line) for line in proc.stdout.split()]
-            return pkts, f"Scapy in this interpreter (Python {platform.python_version()})"
+
+def build_scapy_packets():
+    """Packets built by Scapy now, as (version, packets), or None
+    when Scapy is reachable neither in this interpreter nor in
+    the project venv at ../venv."""
     venv_python = ROOT / "venv" / "bin" / "python"
-    if venv_python.exists():
-        proc = subprocess.run(
-            [str(venv_python), "-c", SCAPY_SCRIPT],
-            capture_output=True, text=True, timeout=300,
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            pkts = [bytes.fromhex(line) for line in proc.stdout.split()]
-            return pkts, "Scapy in the project venv (venv/bin/python)"
-    return None, "Scapy not reachable"
+    for python in [sys.executable, str(venv_python)]:
+        if python != sys.executable and not venv_python.exists():
+            continue
+        try:
+            proc = subprocess.run(
+                [python, "-c", SCAPY_SCRIPT],
+                capture_output=True, text=True, timeout=300,
+            )
+        except OSError:
+            continue
+        lines = proc.stdout.split()
+        if proc.returncode == 0 and len(lines) > 2 and lines[0] == "version":
+            return lines[1], [bytes.fromhex(line) for line in lines[2:]]
+    return None
+
+
+def rebuild_scapy_fixture():
+    built = build_scapy_packets()
+    if built is None:
+        print("Scapy is not reachable here; the fixture was not rebuilt")
+        return 1
+    version, pkts = built
+    text = [
+        f"# Built by Scapy {version} with its BOOTP and DHCP layers,",
+        "# from the jobs in SCAPY_SCRIPT in tests/run_tests.py.",
+        "# Rebuild with: python3 tests/run_tests.py --rebuild-scapy",
+        f"scapy {version}",
+    ] + [p.hex() for p in pkts]
+    SCAPY_FIXTURE.write_text("\n".join(text) + "\n")
+    print(f"wrote {len(pkts)} packets built by Scapy {version}")
+    return 0
+
+
+def scapy_fixture():
+    """The packets Scapy built, as stored in the fixture, and the
+    Scapy version that built them. Stored, so that every run
+    feeds the tool the same inputs, with or without Scapy."""
+    if not SCAPY_FIXTURE.is_file():
+        return None, []
+    version, pkts = None, []
+    for line in SCAPY_FIXTURE.read_text().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("scapy "):
+            version = line.split()[1]
+        else:
+            pkts.append(bytes.fromhex(line))
+    return version, pkts
 
 
 def run_scapy():
     tally = Tally()
-    pkts, how = scapy_packets()
-    tally.how = how
-    if pkts is None:
+    version, pkts = scapy_fixture()
+    tally.version = version
+    if version is None or not pkts:
+        tally.inputs += 1
+        tally.failures.append(f"no Scapy packets in {SCAPY_FIXTURE.name}")
         return tally
     answers, problems = ask_all([request(d) for d in pkts])
     tally.failures += problems
@@ -820,8 +941,13 @@ def main():
     parser.add_argument("--seed", type=int, default=SEED_DEFAULT)
     parser.add_argument("--count", type=int, default=1500)
     parser.add_argument("--raw-count", type=int, default=1200)
+    parser.add_argument("--area-count", type=int, default=800)
     parser.add_argument("--skip-build", action="store_true")
+    parser.add_argument("--rebuild-scapy", action="store_true",
+                        help="rebuild tests/scapy-packets.txt with Scapy, then stop")
     args = parser.parse_args()
+    if args.rebuild_scapy:
+        return rebuild_scapy_fixture()
 
     env = dict(__import__("os").environ)
     env["PATH"] = str(Path.home() / ".elan" / "bin") + ":" + env.get("PATH", "")
@@ -843,24 +969,32 @@ def main():
     fixed = run_fixed()
     readme = run_readme()
     choices = run_choices()
-    rand = run_random(args.seed, args.count, args.raw_count)
+    valid, raw = run_random(args.seed, args.count, args.raw_count)
+    areas = run_areas(args.seed, args.area_count)
     mut = run_mutations()
     scapy = run_scapy()
     malf = run_malformed()
 
-    failures = (
-        fixed.failures + fixed.lines.failures + readme.failures
-        + choices.failures + rand.failures
-        + mut.failures + scapy.failures + malf.failures
-    )
-    total_in = (
-        fixed.inputs + fixed.lines.inputs + choices.inputs + rand.inputs
-        + mut.inputs + scapy.inputs
-    )
-    total_agree = (
-        fixed.agreements + fixed.lines.agreements + choices.agreements
-        + rand.agreements + mut.agreements + scapy.agreements
-    )
+    parts = [
+        ("fixed cases: hand-built messages, the pad cases, the"
+         " rejection shapes", fixed),
+        ("requests with no codes, answered none", fixed.lines),
+        ("the README example, answered ok: with the same codes", readme),
+        ("the readings that depart from the RFCs, with the verdict"
+         " SPEC.md states", choices),
+        (f"random well formed messages (seed {args.seed})", valid),
+        (f"random raw byte strings (seed {args.seed})", raw),
+        (f"random option areas behind a fixed part and cookie"
+         f" (seed {args.seed} + 1)", areas),
+        ("mutations of one message: every truncation, every single"
+         " byte flip, two targeted changes", mut),
+        (f"packets built by Scapy {scapy.version}, from"
+         f" tests/{SCAPY_FIXTURE.name}", scapy),
+        ("malformed request lines, answered error", malf),
+    ]
+    failures = [f for _, t in parts for f in t.failures]
+    total_in = sum(t.inputs for _, t in parts)
+    total_agree = sum(t.agreements for _, t in parts)
 
     lean_ver = subprocess.run(
         ["lake", "env", "lean", "--version"],
@@ -872,38 +1006,39 @@ def main():
         "",
         "Written by `tests/run_tests.py`. Rerun it to check these numbers.",
         "",
-        "- Oracle: a strict reading of the rules in SPEC.md written"
-        f" in the harness (Python {platform.python_version()}), plus"
-        " hand-built fixed cases from RFC 2131 and RFC 2132",
-        f"- Scapy: {scapy.how}; packets built with its BOOTP and DHCP"
-        " layers and settled by the oracle"
-        if scapy.inputs else
-        f"- Scapy: {scapy.how}, no cross check run",
+        "- Oracle: the harness oracle, `oracle_parse` in"
+        " tests/run_tests.py run under Python"
+        f" {platform.python_version()}, a second reading of SPEC.md"
+        " that settles every verdict; Scapy"
+        f" {scapy.version} built some inputs and RFC 2131 and RFC 2132"
+        " others by hand, but no outside decoder judges any input",
+        f"- Seed: {args.seed}",
+        f"- Inputs: {total_in}",
+        f"- Failures: {len(failures)}",
+        f"- Command: python3 tests/run_tests.py --seed {args.seed}"
+        f" --count {args.count} --raw-count {args.raw_count}"
+        f" --area-count {args.area_count}",
         "- ISC DHCP and dnsmasq captures: not present in this"
         " environment, no capture corpus run",
         f"- Lean: {lean_ver}",
-        f"- Seed: {args.seed}",
-        f"- Fixed cases (hand-built messages, the pad cases, the"
-        f" rejection shapes): {fixed.agreements} of {fixed.inputs} agreements",
-        f"- Requests with no codes, answered none:"
-        f" {fixed.lines.agreements} of {fixed.lines.inputs}",
-        f"- README example answered ok: with the same codes:"
-        f" {readme.agreements} of {readme.inputs}",
-        f"- Readings that depart from the RFCs, with the verdict"
-        f" SPEC.md states: {choices.agreements} of {choices.inputs}"
-        f" agreements",
-        f"- Random well formed messages: part of {rand.agreements} of"
-        f" {rand.inputs} agreements in the random run (well formed"
-        f" {args.count}, raw byte strings {args.raw_count})",
-        f"- Mutations (every truncation, every single byte flip,"
-        f" targeted): {mut.agreements} of {mut.inputs} agreements",
-        f"- Scapy cross checks: {scapy.agreements} of {scapy.inputs} agreements"
-        if scapy.inputs else "- Scapy cross checks: 0 run",
-        f"- Malformed requests answered error: {malf.agreements} of {malf.inputs}",
-        f"- Differential inputs: {total_in}",
-        f"- Differential agreements: {total_agree}",
-        "- Named differences: none",
-        f"- Failures: {len(failures)}",
+        "",
+        "## Counts",
+        "",
+        "| part | inputs | agreed |",
+        "| --- | --- | --- |",
+    ]
+    lines += [f"| {name} | {t.inputs} | {t.agreements} |" for name, t in parts]
+    lines += [
+        f"| total | {total_in} | {total_agree} |",
+        "",
+        "An input agrees when the tool's answer is the oracle's"
+        " answer, byte for byte, and, when it is `ok:`, the reprint"
+        " is a well formed message, as `Spec.parse_wf` says. The"
+        " harness keeps no list of excused differences: every"
+        " disagreement counts as a failure.",
+        "",
+        f"Of the {areas.inputs} random option areas, the oracle takes"
+        f" {areas.taken} and turns away {areas.inputs - areas.taken}.",
         "",
     ]
     if failures:
