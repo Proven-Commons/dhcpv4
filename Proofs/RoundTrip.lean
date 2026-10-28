@@ -443,8 +443,8 @@ theorem parseOptionsGo_printOptions :
     have h1 : (printOptions ([] : List DhcpOption)).length = 1 := rfl
     obtain ⟨f, rfl⟩ : ∃ f, fuel = f + 1 := ⟨fuel - 1, by omega⟩
     show parseOptionsGo (f + 1) [255] = some []
-    rw [parseOptionsGo_step, if_neg (by decide : ¬ ((255 : UInt8) = 0)),
-      if_pos rfl]
+    rw [parseOptionsGo_step, ite_eq_right (by decide : ¬ ((255 : UInt8) = 0)),
+      ite_eq_left rfl]
     exact rfl
   | cons o os ih =>
     intro fuel hw hf
@@ -481,7 +481,7 @@ theorem parseOptionsGo_printOptions :
     show parseOptionsGo (f + 1)
       (c.toUInt8 :: v.length.toUInt8 :: (v ++ printOptions os))
       = some ((c, v) :: os)
-    rw [parseOptionsGo_step, if_neg hb0, if_neg hb255]
+    rw [parseOptionsGo_step, ite_eq_right hb0, ite_eq_right hb255]
     show (if ((v ++ printOptions os).take (v.length.toUInt8).toNat).length
         = (v.length.toUInt8).toNat then
       (parseOptionsGo f ((v ++ printOptions os).drop
@@ -489,7 +489,7 @@ theorem parseOptionsGo_printOptions :
         (fun os' => (c.toUInt8.toNat,
           (v ++ printOptions os).take (v.length.toUInt8).toNat) :: os')
       else none) = some ((c, v) :: os)
-    rw [hlen', List.take_left, if_pos rfl, List.drop_left,
+    rw [hlen', List.take_left, ite_eq_left rfl, List.drop_left,
       ih f htail hf']
     simp only [Option.map_some, hc']
 
@@ -557,47 +557,47 @@ theorem canonOptionsGo_parse :
     | cons b rest =>
       by_cases hb0 : b = 0
       · subst hb0
-        rw [parseOptionsGo_step, if_pos rfl] at h
-        rw [canonOptionsGo_step, if_pos rfl]
+        rw [parseOptionsGo_step, ite_eq_left rfl] at h
+        rw [canonOptionsGo_step, ite_eq_left rfl]
         exact ih rest os h
       · by_cases hb255 : b = 255
         · subst hb255
           rw [parseOptionsGo_step,
-            if_neg (by decide : ¬ ((255 : UInt8) = 0)),
-            if_pos rfl] at h
+            ite_eq_right (by decide : ¬ ((255 : UInt8) = 0)),
+            ite_eq_left rfl] at h
           by_cases hall : rest.all (fun x => x == 0) = true
-          · rw [if_pos hall] at h
+          · rw [ite_eq_left hall] at h
             simp only [Option.some.injEq] at h
             subst h
             rw [canonOptionsGo_step,
-              if_neg (by decide : ¬ ((255 : UInt8) = 0)),
-              if_pos rfl]
+              ite_eq_right (by decide : ¬ ((255 : UInt8) = 0)),
+              ite_eq_left rfl]
             rfl
-          · rw [if_neg hall] at h
+          · rw [ite_eq_right hall] at h
             simp at h
         · cases rest with
           | nil =>
-            rw [parseOptionsGo_step_single, if_neg hb0,
-              if_neg hb255] at h
+            rw [parseOptionsGo_step_single, ite_eq_right hb0,
+              ite_eq_right hb255] at h
             simp at h
           | cons len rest' =>
-            rw [parseOptionsGo_step_cons, if_neg hb0,
-              if_neg hb255] at h
+            rw [parseOptionsGo_step_cons, ite_eq_right hb0,
+              ite_eq_right hb255] at h
             by_cases hcond :
                 (rest'.take len.toNat).length = len.toNat
-            · rw [if_pos hcond] at h
+            · rw [ite_eq_left hcond] at h
               obtain ⟨os', hos', hos''⟩ :=
                 Option.map_eq_some_iff.mp h
               subst hos''
-              rw [canonOptionsGo_step_cons, if_neg hb0,
-                if_neg hb255, ih _ _ hos']
+              rw [canonOptionsGo_step_cons, ite_eq_right hb0,
+                ite_eq_right hb255, ih _ _ hos']
               show b :: len :: (rest'.take len.toNat) ++
                   printOptions os'
                 = ((b.toNat).toUInt8 ::
                     (rest'.take len.toNat).length.toUInt8 ::
                     (rest'.take len.toNat)) ++ printOptions os'
               rw [toNat_toUInt8, hcond, toNat_toUInt8]
-            · rw [if_neg hcond] at h
+            · rw [ite_eq_right hcond] at h
               simp at h
 
 /-- Every option the reader takes has a code from 1 to 254
@@ -713,8 +713,8 @@ theorem parse_print {m : Message} (hw : WF m) :
   rw [parseFixed_printFixed hwf (printOptions m.options)]
   simp only [Option.bind_eq_bind, Option.bind_some]
   rw [parseOptions_printOptions hwo.1]
-  simp only [Option.bind_eq_bind, Option.bind_some]
-  rw [if_pos (check53_of_WFOptions hwo)]
+  simp only [Option.bind_some]
+  rw [ite_eq_left (check53_of_WFOptions hwo)]
 
 /-- The mirror claim: printing a message the parser took
     gives the canonical form of the bytes it was read from:
@@ -728,7 +728,7 @@ theorem print_parse {bs : List UInt8} {m : Message}
   dsimp only at h
   obtain ⟨os, hos, h⟩ := Option.bind_eq_some_iff.mp h
   by_cases hc : check53 os = true
-  · rw [if_pos hc] at h
+  · rw [ite_eq_left hc] at h
     simp only [Option.some.injEq] at h
     subst h
     obtain ⟨hfix, hc16, hs64, hf128⟩ := parseFixed_inv hf
@@ -744,7 +744,7 @@ theorem print_parse {bs : List UInt8} {m : Message}
     show printFixed f ++ printOptions os
       = bs.take 240 ++ canonOptions (bs.drop 240)
     rw [htake, hdrop, hcanon]
-  · rw [if_neg hc] at h
+  · rw [ite_eq_right hc] at h
     simp at h
 
 /-- Soundness: every message the parser takes is well formed,
