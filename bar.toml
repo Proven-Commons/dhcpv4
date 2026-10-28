@@ -1,0 +1,45 @@
+# Read by bar/check.py in Proven-Commons/mission.
+# See playbook/verified-bar.md there for what each field means.
+
+[project]
+name = "dhcpv4"
+# "in-progress" until every bar item passes, then "verified".
+status = "in-progress"
+page = "README.md"
+# GitHub handles of everyone who wrote the specification.
+spec_authors = ["abu-aska"]
+# The program people run. A change to it voids the approval.
+entry_points = ["Main.lean"]
+
+[spec]
+files = ["SPEC.md", "Spec.lean"]
+# The code under proof: the functions the statements are about.
+code = [
+  # The data types the statements are about.
+  "Dhcp.DhcpOption", "Dhcp.Fixed", "Dhcp.Message",
+  # The byte forms and the printer.
+  "Dhcp.be16", "Dhcp.u16", "Dhcp.be32", "Dhcp.u32",
+  "Dhcp.cookie", "Dhcp.printFixed", "Dhcp.printOptions",
+  "Dhcp.print",
+  # The canonical form of an option area, which the
+  # print_parse statement is stated with.
+  "Dhcp.canonOptionsGo", "Dhcp.canonOptions",
+  # Well formedness.
+  "Dhcp.WFFixed", "Dhcp.WFOptions", "Dhcp.WF",
+  # The length checked readers and the parser.
+  "Dhcp.getU8", "Dhcp.getU16", "Dhcp.getU32", "Dhcp.getBytes",
+  "Dhcp.getCookie", "Dhcp.parseFixed", "Dhcp.parseOptionsGo",
+  "Dhcp.parseOptions", "Dhcp.check53", "Dhcp.parse",
+]
+
+# One entry per approval, added in a pull request the reviewer approves.
+# [[spec.approval]]
+# reviewer = "github-handle"
+# date = "2026-11-02"
+# sha256 = "..."
+# record = "https://github.com/Proven-Commons/dhcpv4/pull/<n>"
+
+[tests]
+results = "tests/TEST-RESULTS.md"
+command = "python3 tests/run_tests.py"
+files = ["tests/run_tests.py"]

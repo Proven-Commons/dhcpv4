@@ -8,6 +8,9 @@ name = "Dhcp"
 [[lean_lib]]
 name = "Proofs"
 
+[[lean_lib]]
+name = "Spec"
+
 [[lean_exe]]
 name = "dhcpv4"
 root = "Main"

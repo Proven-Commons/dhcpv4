@@ -11,8 +11,9 @@
     the input: the first 240 bytes as they stood (the fixed
     fields and the cookie stand unchanged under printing),
     then the options with pad bytes dropped and exactly one
-    end byte. `canonOptions` below spells that canonical
-    option area out as a function.
+    end byte. `canonOptions`, in `Dhcp/Value.lean` beside
+    the printer, spells that canonical option area out as a
+    function.
 
   The steps: the two and four byte numbers read back as the
   values they were printed from, and printed numbers recover
@@ -459,27 +460,6 @@ theorem parseOptions_printOptions {os : List DhcpOption}
   show parseOptionsGo ((printOptions os).length + 1)
     (printOptions os) = some os
   exact parseOptionsGo_printOptions os _ hw (Nat.lt_succ_self _)
-
-/-- The canonical form of an option area: the options as the
-    printer writes them, pad bytes dropped, trailing zeros
-    after the end byte dropped, exactly one end byte, and an
-    end byte supplied when the area had none. Defined with
-    the same fuel shape as the reader. -/
-def canonOptionsGo : Nat → List UInt8 → List UInt8
-  | 0, _ => [255]
-  | _ + 1, [] => [255]
-  | fuel + 1, b :: rest =>
-    if b = 0 then canonOptionsGo fuel rest
-    else if b = 255 then [255]
-    else
-      match rest with
-      | [] => [255]
-      | len :: rest' => b :: len :: (rest'.take len.toNat) ++
-          canonOptionsGo fuel (rest'.drop len.toNat)
-
-/-- The canonical form of an option area. -/
-def canonOptions (bs : List UInt8) : List UInt8 :=
-  canonOptionsGo (bs.length + 1) bs
 
 /-- One step of the canonical form on a byte and what
     follows it, stated for rewriting. -/

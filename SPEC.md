@@ -119,8 +119,8 @@ canonical form prints to itself, byte for byte.
 
 ## The claims
 
-`Dhcp.Proofs.parse_print`: for every well formed message,
-parsing its printed form gives the message back.
+`Spec.parse_print`: for every well formed message, parsing
+its printed form gives the message back.
 
 Well formed means: op is 1 or 2; htype and hops fit one
 byte; hlen is at most 16; xid and the four addresses fit
@@ -130,9 +130,9 @@ from 1 to 254; every option value fits one length byte; and
 option 53 stands exactly once with a one byte value from 1
 to 8.
 
-`Dhcp.Proofs.print_parse`: for every byte list the parser
-takes, printing the parsed message gives the canonical form
-of the input, as spelled out above: the first 240 bytes as
+`Spec.print_parse`: for every byte list the parser takes,
+printing the parsed message gives the canonical form of
+the input, as spelled out above: the first 240 bytes as
 they stood, then the canonical option area (the theorem
 states this with the `canonOptions` function, which walks
 the option area dropping pads and trailing zeros and ends
@@ -140,8 +140,11 @@ it with one end byte).
 
 That the parser accepts every message these rules allow,
 and turns away every message they forbid, is not proved.
-The differential tests in `tests/` check that behaviour
-instead.
+Single refusals, one for each headline rule above, are
+pinned as theorems (`Spec.rejects_*` in the table below),
+each on one concrete input from the test harness. The
+differential tests in `tests/` check the behaviour on many
+more inputs instead.
 
 ## The command-line tool
 
@@ -155,3 +158,30 @@ message parses, or `none` when it is turned away. A
 malformed request (an unknown operation, a field that is
 not plain decimal digits, a code above 255, extra spaces)
 prints `error`. A line may end in LF or CR LF.
+
+## Properties and their theorems
+
+Each property a reader can check in the page (`README.md`)
+names its theorem. The theorems are stated in `Spec.lean`
+and proved in `Proofs/SpecProofs.lean`, resting on the
+round trip proofs in `Proofs/RoundTrip.lean`, where they
+are `Dhcp.Proofs.parse_print` and `Dhcp.Proofs.print_parse`.
+The refusal theorems are single inputs, one for each named
+rejection case in the test harness; the tests in `tests/`
+cover each rule on many more inputs.
+
+| Property | Theorem |
+|----------|---------|
+| Parsing the printed form of a well formed message gives the message back | `Spec.parse_print` |
+| Printing a message the parser took gives the canonical form of the bytes it was read from | `Spec.print_parse` |
+| A message shorter than 240 bytes is refused | `Spec.rejects_short_message` |
+| A message with a wrong magic cookie is refused | `Spec.rejects_wrong_cookie` |
+| An option length that runs past the end of the message is refused | `Spec.rejects_option_overrun` |
+| A message without option 53 is refused | `Spec.rejects_no_option_53` |
+| An option 53 of length 2 is refused | `Spec.rejects_option_53_length_2` |
+| An option 53 with value 0 is refused | `Spec.rejects_option_53_value_0` |
+| An option 53 with value 9 is refused | `Spec.rejects_option_53_value_9` |
+| A message with two option 53 items is refused | `Spec.rejects_option_53_twice` |
+| A message with op 3 is refused | `Spec.rejects_op_3` |
+| A message with hlen 17 is refused | `Spec.rejects_hlen_17` |
+| A nonzero byte after the end byte is refused | `Spec.rejects_nonzero_after_end` |

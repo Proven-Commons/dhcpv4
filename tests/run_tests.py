@@ -38,6 +38,12 @@ Four parts.
 
 4. Malformed request lines must be answered `error`.
 
+Two more line checks stand apart from the fixed cases of
+part 1: the requests `parse ` and `parse`, with no codes,
+must be answered `none` (the empty message is turned away).
+The results file counts them on their own line, not as
+fixed cases.
+
     python3 tests/run_tests.py [--seed N] [--count N]
 
 The tool is driven one batch process per chunk of requests,
@@ -458,10 +464,12 @@ def run_fixed():
     tally.failures += problems
     for (label, data), answer in zip(cases, answers):
         tally.check(data, answer, f"fixed {label}")
+    lines = Tally()
     answers, problems = ask_all(["parse ", "parse"])
-    tally.failures += problems
+    lines.failures += problems
     for line, answer in zip(["parse ", "parse"], answers):
-        tally.check_line(line, answer, "none", "no codes")
+        lines.check_line(line, answer, "none", "no codes")
+    tally.lines = lines
     return tally
 
 
@@ -694,13 +702,16 @@ def main():
     malf = run_malformed()
 
     failures = (
-        fixed.failures + rand.failures + mut.failures
-        + scapy.failures + malf.failures
+        fixed.failures + fixed.lines.failures + rand.failures
+        + mut.failures + scapy.failures + malf.failures
     )
-    total_in = fixed.inputs + rand.inputs + mut.inputs + scapy.inputs
+    total_in = (
+        fixed.inputs + fixed.lines.inputs + rand.inputs
+        + mut.inputs + scapy.inputs
+    )
     total_agree = (
-        fixed.agreements + rand.agreements + mut.agreements
-        + scapy.agreements
+        fixed.agreements + fixed.lines.agreements
+        + rand.agreements + mut.agreements + scapy.agreements
     )
 
     lean_ver = subprocess.run(
@@ -726,6 +737,8 @@ def main():
         f"- Seed: {args.seed}",
         f"- Fixed cases (hand-built messages, the pad cases, the"
         f" rejection shapes): {fixed.agreements} of {fixed.inputs} agreements",
+        f"- Requests with no codes, answered none:"
+        f" {fixed.lines.agreements} of {fixed.lines.inputs}",
         f"- Random well formed messages: part of {rand.agreements} of"
         f" {rand.inputs} agreements in the random run (well formed"
         f" {args.count}, raw byte strings {args.raw_count})",

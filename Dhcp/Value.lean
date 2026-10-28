@@ -128,6 +128,29 @@ def printOptions : List DhcpOption → List UInt8
 def print (m : Message) : List UInt8 :=
   printFixed m.fixed ++ printOptions m.options
 
+/-- The canonical form of an option area: the options as the
+    printer writes them, pad bytes dropped, trailing zeros
+    after the end byte dropped, exactly one end byte, and an
+    end byte supplied when the area had none. Defined with
+    the same fuel shape as the reader. It lives here, with
+    the printer it mirrors, because the `print_parse`
+    statement in the specification is stated with it. -/
+def canonOptionsGo : Nat → List UInt8 → List UInt8
+  | 0, _ => [255]
+  | _ + 1, [] => [255]
+  | fuel + 1, b :: rest =>
+    if b = 0 then canonOptionsGo fuel rest
+    else if b = 255 then [255]
+    else
+      match rest with
+      | [] => [255]
+      | len :: rest' => b :: len :: (rest'.take len.toNat) ++
+          canonOptionsGo fuel (rest'.drop len.toNat)
+
+/-- The canonical form of an option area. -/
+def canonOptions (bs : List UInt8) : List UInt8 :=
+  canonOptionsGo (bs.length + 1) bs
+
 /-- Well formed fixed fields: op is 1 or 2, hlen fits the
     sixteen byte chaddr field, the other numbers fit their
     widths, and the three byte blocks hold their full
