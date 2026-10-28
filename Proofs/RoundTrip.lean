@@ -98,144 +98,185 @@ theorem be32_u32 (a b c d : UInt8) :
     rw [toUInt8_toNat]; simp only [u32]; omega
   simp only [be32, e1, e2, e3, e4, toNat_toUInt8]
 
-/-! ## The readers, on printed forms and on read forms -/
+/-! ## The readers, on printed forms and on read forms
 
-/-- One step of the one byte reader, stated for rewriting. -/
-theorem getU8_cons (b : UInt8) (r : List UInt8) :
-    getU8 (b :: r) = some (b.toNat, r) := rfl
+Each reader lemma is stated for any continuation `k`, so a
+proof about the fixed part rewrites one reader at a time: the
+continuation in the goal is matched as it stands, and what is
+left is its body, applied to the field read. -/
 
-/-- Reading two bytes off the front of a printed value and
+/-- A printed two byte value, as its two bytes in front of
     what follows it. -/
-theorem getU16_be16 (n : Nat) (h : n < 65536) (r : List UInt8) :
-    getU16 (be16 n ++ r) = some (n, r) := by
-  show getU16 ((n / 256).toUInt8 :: n.toUInt8 :: r) = some (n, r)
-  show some (u16 (n / 256).toUInt8 n.toUInt8, r) = some (n, r)
-  rw [u16_be16 n h]
+theorem be16_append (n : Nat) (r : List UInt8) :
+    be16 n ++ r = (n / 256).toUInt8 :: n.toUInt8 :: r := rfl
 
-/-- Reading four bytes off the front of a printed value and
+/-- A printed four byte value, as its four bytes in front of
     what follows it. -/
-theorem getU32_be32 (n : Nat) (h : n < 4294967296)
-    (r : List UInt8) :
-    getU32 (be32 n ++ r) = some (n, r) := by
-  show getU32 ((n / 16777216).toUInt8 :: (n / 65536).toUInt8 ::
-    (n / 256).toUInt8 :: n.toUInt8 :: r) = some (n, r)
-  show some (u32 (n / 16777216).toUInt8 (n / 65536).toUInt8
-    (n / 256).toUInt8 n.toUInt8, r) = some (n, r)
-  rw [u32_be32 n h]
+theorem be32_append (n : Nat) (r : List UInt8) :
+    be32 n ++ r =
+      (n / 16777216).toUInt8 :: (n / 65536).toUInt8 ::
+        (n / 256).toUInt8 :: n.toUInt8 :: r := rfl
 
-/-- Reading a byte block off the front of a printed block and
-    what follows it. -/
-theorem getBytes_app {n : Nat} {v : List UInt8} (hv : v.length = n)
-    (r : List UInt8) : getBytes n (v ++ r) = some (v, r) := by
-  unfold getBytes
+/-- One step of the one byte reader. -/
+theorem withU8_cons {α : Type} (b : UInt8) (r : List UInt8)
+    (k : Nat → List UInt8 → Option α) :
+    withU8 (b :: r) k = k b.toNat r := rfl
+
+/-- One step of the two byte reader. -/
+theorem withU16_cons {α : Type} (a b : UInt8) (r : List UInt8)
+    (k : Nat → List UInt8 → Option α) :
+    withU16 (a :: b :: r) k = k (u16 a b) r := rfl
+
+/-- One step of the four byte reader. -/
+theorem withU32_cons {α : Type} (a b c d : UInt8)
+    (r : List UInt8) (k : Nat → List UInt8 → Option α) :
+    withU32 (a :: b :: c :: d :: r) k = k (u32 a b c d) r := rfl
+
+/-- The two byte reader on a printed value reads the value. -/
+theorem withU16_be16 {α : Type} {n : Nat} (h : n < 65536)
+    (r : List UInt8) (k : Nat → List UInt8 → Option α) :
+    withU16 (be16 n ++ r) k = k n r := by
+  rw [be16_append, withU16_cons, u16_be16 n h]
+
+/-- The four byte reader on a printed value reads the
+    value. -/
+theorem withU32_be32 {α : Type} {n : Nat} (h : n < 4294967296)
+    (r : List UInt8) (k : Nat → List UInt8 → Option α) :
+    withU32 (be32 n ++ r) k = k n r := by
+  rw [be32_append, withU32_cons, u32_be32 n h]
+
+/-- The block reader on a block of the length it asks for
+    reads the block. -/
+theorem withBytes_app {α : Type} {n : Nat} {v : List UInt8}
+    (hv : v.length = n) (r : List UInt8)
+    (k : List UInt8 → List UInt8 → Option α) :
+    withBytes n (v ++ r) k = k v r := by
+  unfold withBytes
   have ht : (v ++ r).take n = v := by
     rw [← hv]; exact List.take_left
   have hd : (v ++ r).drop n = r := by
     rw [← hv]; exact List.drop_left
-  rw [ht, hd, if_pos hv]
+  rw [ht, hd, ite_eq_left hv]
 
-/-- Reading the cookie off the front of a printed cookie and
-    what follows it. -/
-theorem getCookie_app (r : List UInt8) :
-    getCookie (cookie ++ r) = some r := by
-  unfold getCookie
+/-- The cookie reader on a printed cookie reads past it. -/
+theorem withCookie_app {α : Type} (r : List UInt8)
+    (k : List UInt8 → Option α) :
+    withCookie (cookie ++ r) k = k r := by
+  unfold withCookie
   have ht : (cookie ++ r).take 4 = cookie := List.take_left' rfl
   have hd : (cookie ++ r).drop 4 = r := List.drop_left' rfl
-  rw [ht, hd, if_pos rfl]
+  rw [ht, hd, ite_eq_left rfl]
 
-/-- A byte read by the one byte reader prints back as that
-    byte: the input was the byte and the rest. -/
-theorem getU8_inv {bs : List UInt8} {n : Nat} {r : List UInt8}
-    (h : getU8 bs = some (n, r)) : bs = n.toUInt8 :: r := by
+/-- A successful one byte read: the input was the byte and
+    the rest, and the value fits a byte. -/
+theorem withU8_inv {α : Type} {bs : List UInt8}
+    {k : Nat → List UInt8 → Option α} {x : α}
+    (h : withU8 bs k = some x) :
+    ∃ n r, bs = n.toUInt8 :: r ∧ n < 256 ∧ k n r = some x := by
   cases bs with
-  | nil => simp [getU8] at h
-  | cons b r' =>
-    have hstep : getU8 (b :: r') = some (b.toNat, r') := rfl
-    rw [hstep] at h
-    simp only [Option.some.injEq, Prod.mk.injEq] at h
-    obtain ⟨rfl, rfl⟩ := h
-    rw [toNat_toUInt8]
+  | nil =>
+    have h0 : withU8 ([] : List UInt8) k = none := rfl
+    rw [h0] at h
+    cases h
+  | cons b r =>
+    rw [withU8_cons] at h
+    exact ⟨b.toNat, r, by rw [toNat_toUInt8], toNat_lt b, h⟩
 
-/-- Bytes read by the two byte reader print back as those
-    bytes, and the value fits two bytes. -/
-theorem getU16_inv {bs : List UInt8} {n : Nat} {r : List UInt8}
-    (h : getU16 bs = some (n, r)) :
-    bs = be16 n ++ r ∧ n < 65536 := by
+/-- A successful two byte read: the input was the printed
+    value and the rest, and the value fits two bytes. -/
+theorem withU16_inv {α : Type} {bs : List UInt8}
+    {k : Nat → List UInt8 → Option α} {x : α}
+    (h : withU16 bs k = some x) :
+    ∃ n r, bs = be16 n ++ r ∧ n < 65536 ∧ k n r = some x := by
   cases bs with
-  | nil => simp [getU16] at h
+  | nil =>
+    have h0 : withU16 ([] : List UInt8) k = none := rfl
+    rw [h0] at h
+    cases h
   | cons a bs' =>
     cases bs' with
-    | nil => simp [getU16] at h
-    | cons b r' =>
-      have hstep : getU16 (a :: b :: r') = some (u16 a b, r') := rfl
-      rw [hstep] at h
-      simp only [Option.some.injEq, Prod.mk.injEq] at h
-      obtain ⟨rfl, rfl⟩ := h
-      refine ⟨?_, ?_⟩
-      · simp only [be16_u16, List.cons_append, List.nil_append]
+    | nil =>
+      have h0 : withU16 [a] k = none := rfl
+      rw [h0] at h
+      cases h
+    | cons b r =>
+      rw [withU16_cons] at h
+      refine ⟨u16 a b, r, ?_, ?_, h⟩
+      · rw [be16_u16]
+        rfl
       · have ha := toNat_lt a
         have hb := toNat_lt b
         simp only [u16]; omega
 
-/-- Bytes read by the four byte reader print back as those
-    bytes, and the value fits four bytes. -/
-theorem getU32_inv {bs : List UInt8} {n : Nat} {r : List UInt8}
-    (h : getU32 bs = some (n, r)) :
-    bs = be32 n ++ r ∧ n < 4294967296 := by
+/-- A successful four byte read: the input was the printed
+    value and the rest, and the value fits four bytes. -/
+theorem withU32_inv {α : Type} {bs : List UInt8}
+    {k : Nat → List UInt8 → Option α} {x : α}
+    (h : withU32 bs k = some x) :
+    ∃ n r, bs = be32 n ++ r ∧ n < 4294967296 ∧ k n r = some x := by
   cases bs with
-  | nil => simp [getU32] at h
+  | nil =>
+    have h0 : withU32 ([] : List UInt8) k = none := rfl
+    rw [h0] at h
+    cases h
   | cons a bs1 =>
     cases bs1 with
-    | nil => simp [getU32] at h
+    | nil =>
+      have h0 : withU32 [a] k = none := rfl
+      rw [h0] at h
+      cases h
     | cons b bs2 =>
       cases bs2 with
-      | nil => simp [getU32] at h
+      | nil =>
+        have h0 : withU32 [a, b] k = none := rfl
+        rw [h0] at h
+        cases h
       | cons c bs3 =>
         cases bs3 with
-        | nil => simp [getU32] at h
-        | cons d r' =>
-          have hstep : getU32 (a :: b :: c :: d :: r')
-              = some (u32 a b c d, r') := rfl
-          rw [hstep] at h
-          simp only [Option.some.injEq, Prod.mk.injEq] at h
-          obtain ⟨rfl, rfl⟩ := h
-          refine ⟨?_, ?_⟩
-          · simp only [be32_u32, List.cons_append, List.nil_append]
+        | nil =>
+          have h0 : withU32 [a, b, c] k = none := rfl
+          rw [h0] at h
+          cases h
+        | cons d r =>
+          rw [withU32_cons] at h
+          refine ⟨u32 a b c d, r, ?_, ?_, h⟩
+          · rw [be32_u32]
+            rfl
           · have ha := toNat_lt a
             have hb := toNat_lt b
             have hc := toNat_lt c
             have hd := toNat_lt d
             simp only [u32]; omega
 
-/-- A block read by the block reader is its first `n` bytes,
-    and the rest is the rest: the input was the block and the
-    rest. -/
-theorem getBytes_inv {n : Nat} {bs v : List UInt8}
-    {r : List UInt8} (h : getBytes n bs = some (v, r)) :
-    v.length = n ∧ bs = v ++ r := by
-  unfold getBytes at h
+/-- A successful block read: the block holds `n` bytes, and
+    the input was the block and the rest. -/
+theorem withBytes_inv {α : Type} {n : Nat} {bs : List UInt8}
+    {k : List UInt8 → List UInt8 → Option α} {x : α}
+    (h : withBytes n bs k = some x) :
+    ∃ v r, v.length = n ∧ bs = v ++ r ∧ k v r = some x := by
+  unfold withBytes at h
   by_cases hc : (bs.take n).length = n
-  · rw [if_pos hc] at h
-    simp only [Option.some.injEq, Prod.mk.injEq] at h
-    obtain ⟨rfl, rfl⟩ := h
-    exact ⟨hc, (List.take_append_drop n bs).symm⟩
-  · rw [if_neg hc] at h
-    simp at h
+  · rw [ite_eq_left hc] at h
+    exact ⟨bs.take n, bs.drop n, hc,
+      (List.take_append_drop n bs).symm, h⟩
+  · rw [ite_eq_right hc] at h
+    cases h
 
-/-- An input the cookie reader takes started with the
-    cookie. -/
-theorem getCookie_inv {bs : List UInt8} {r : List UInt8}
-    (h : getCookie bs = some r) : bs = cookie ++ r := by
-  unfold getCookie at h
+/-- A successful cookie read: the input was the cookie and
+    the rest. -/
+theorem withCookie_inv {α : Type} {bs : List UInt8}
+    {k : List UInt8 → Option α} {x : α}
+    (h : withCookie bs k = some x) :
+    ∃ r, bs = cookie ++ r ∧ k r = some x := by
+  unfold withCookie at h
   by_cases hc : bs.take 4 = cookie
-  · rw [if_pos hc] at h
-    simp only [Option.some.injEq] at h
-    subst h
+  · rw [ite_eq_left hc] at h
+    refine ⟨bs.drop 4, ?_, h⟩
     calc bs = bs.take 4 ++ bs.drop 4 :=
         (List.take_append_drop 4 bs).symm
     _ = cookie ++ bs.drop 4 := by rw [hc]
-  · rw [if_neg hc] at h
-    simp at h
+  · rw [ite_eq_right hc] at h
+    cases h
 
 /-! ## The fixed fields -/
 
@@ -249,7 +290,9 @@ theorem printFixed_length {f : Fixed}
     List.length_cons, List.length_nil, hc, hs, hf]
 
 /-- The printed fixed fields read back as the fields, over
-    any bytes that follow them. -/
+    any bytes that follow them. The proof reads the fields one
+    reader at a time; each step is a rewrite with a reader
+    lemma, so no kernel has to evaluate the parser. -/
 theorem parseFixed_printFixed {f : Fixed} (hw : WFFixed f)
     (rest : List UInt8) :
     parseFixed (printFixed f ++ rest) = some (f, rest) := by
@@ -273,25 +316,12 @@ theorem parseFixed_printFixed {f : Fixed} (hw : WFFixed f)
       (f.file ++ (cookie ++ rest))))))))))) := by
     simp only [printFixed, ← List.append_assoc, List.cons_append,
       List.nil_append]
-  rw [key]
-  simp only [parseFixed]
-  rw [getU8_cons]; simp only [Option.bind_eq_bind, Option.bind_some]
-  rw [getU8_cons]; simp only [Option.bind_eq_bind, Option.bind_some]
-  rw [getU8_cons]; simp only [Option.bind_eq_bind, Option.bind_some]
-  rw [getU8_cons]; simp only [Option.bind_eq_bind, Option.bind_some]
-  rw [getU32_be32 f.xid hxid]; simp only [Option.bind_eq_bind, Option.bind_some]
-  rw [getU16_be16 f.secs hsecs]; simp only [Option.bind_eq_bind, Option.bind_some]
-  rw [getU16_be16 f.flags hflags]; simp only [Option.bind_eq_bind, Option.bind_some]
-  rw [getU32_be32 f.ciaddr hci]; simp only [Option.bind_eq_bind, Option.bind_some]
-  rw [getU32_be32 f.yiaddr hyi]; simp only [Option.bind_eq_bind, Option.bind_some]
-  rw [getU32_be32 f.siaddr hsi]; simp only [Option.bind_eq_bind, Option.bind_some]
-  rw [getU32_be32 f.giaddr hgi]; simp only [Option.bind_eq_bind, Option.bind_some]
-  rw [getBytes_app hch]; simp only [Option.bind_eq_bind, Option.bind_some]
-  rw [getBytes_app hsn]; simp only [Option.bind_eq_bind, Option.bind_some]
-  rw [getBytes_app hfi]; simp only [Option.bind_eq_bind, Option.bind_some]
-  rw [getCookie_app]; simp only [Option.bind_eq_bind, Option.bind_some]
-  rw [hop', hhtype', hhlen', hhops']
-  rw [if_pos ⟨hop, hhlen⟩]
+  rw [key, parseFixed.eq_1, withU8_cons, withU8_cons, withU8_cons,
+    withU8_cons, withU32_be32 hxid, withU16_be16 hsecs,
+    withU16_be16 hflags, withU32_be32 hci, withU32_be32 hyi,
+    withU32_be32 hsi, withU32_be32 hgi, withBytes_app hch,
+    withBytes_app hsn, withBytes_app hfi, withCookie_app,
+    hop', hhtype', hhlen', hhops', ite_eq_left ⟨hop, hhlen⟩]
 
 /-- The fixed fields a successful read gives print back to
     the bytes they were read from, and its three byte blocks
@@ -300,52 +330,32 @@ theorem parseFixed_inv {bs : List UInt8} {f : Fixed}
     {rest : List UInt8} (h : parseFixed bs = some (f, rest)) :
     bs = printFixed f ++ rest ∧ f.chaddr.length = 16 ∧
     f.sname.length = 64 ∧ f.file.length = 128 := by
-  simp only [parseFixed] at h
-  obtain ⟨⟨op, r1⟩, h1, h⟩ := Option.bind_eq_some_iff.mp h
-  dsimp only at h
-  obtain ⟨⟨htype, r2⟩, h2, h⟩ := Option.bind_eq_some_iff.mp h
-  dsimp only at h
-  obtain ⟨⟨hlen, r3⟩, h3, h⟩ := Option.bind_eq_some_iff.mp h
-  dsimp only at h
-  obtain ⟨⟨hops, r4⟩, h4, h⟩ := Option.bind_eq_some_iff.mp h
-  dsimp only at h
-  obtain ⟨⟨xid, r5⟩, h5, h⟩ := Option.bind_eq_some_iff.mp h
-  dsimp only at h
-  obtain ⟨⟨secs, r6⟩, h6, h⟩ := Option.bind_eq_some_iff.mp h
-  dsimp only at h
-  obtain ⟨⟨flags, r7⟩, h7, h⟩ := Option.bind_eq_some_iff.mp h
-  dsimp only at h
-  obtain ⟨⟨ciaddr, r8⟩, h8, h⟩ := Option.bind_eq_some_iff.mp h
-  dsimp only at h
-  obtain ⟨⟨yiaddr, r9⟩, h9, h⟩ := Option.bind_eq_some_iff.mp h
-  dsimp only at h
-  obtain ⟨⟨siaddr, r10⟩, h10, h⟩ := Option.bind_eq_some_iff.mp h
-  dsimp only at h
-  obtain ⟨⟨giaddr, r11⟩, h11, h⟩ := Option.bind_eq_some_iff.mp h
-  dsimp only at h
-  obtain ⟨⟨chaddr, r12⟩, h12, h⟩ := Option.bind_eq_some_iff.mp h
-  dsimp only at h
-  obtain ⟨⟨sname, r13⟩, h13, h⟩ := Option.bind_eq_some_iff.mp h
-  dsimp only at h
-  obtain ⟨⟨file, r14⟩, h14, h⟩ := Option.bind_eq_some_iff.mp h
-  dsimp only at h
-  obtain ⟨r15, h15, h⟩ := Option.bind_eq_some_iff.mp h
+  rw [parseFixed.eq_1] at h
+  obtain ⟨op, r1, e1, _, h⟩ := withU8_inv h
+  obtain ⟨htype, r2, e2, _, h⟩ := withU8_inv h
+  obtain ⟨hlen, r3, e3, _, h⟩ := withU8_inv h
+  obtain ⟨hops, r4, e4, _, h⟩ := withU8_inv h
+  obtain ⟨xid, r5, e5, _, h⟩ := withU32_inv h
+  obtain ⟨secs, r6, e6, _, h⟩ := withU16_inv h
+  obtain ⟨flags, r7, e7, _, h⟩ := withU16_inv h
+  obtain ⟨ciaddr, r8, e8, _, h⟩ := withU32_inv h
+  obtain ⟨yiaddr, r9, e9, _, h⟩ := withU32_inv h
+  obtain ⟨siaddr, r10, e10, _, h⟩ := withU32_inv h
+  obtain ⟨giaddr, r11, e11, _, h⟩ := withU32_inv h
+  obtain ⟨chaddr, r12, l12, e12, h⟩ := withBytes_inv h
+  obtain ⟨sname, r13, l13, e13, h⟩ := withBytes_inv h
+  obtain ⟨file, r14, l14, e14, h⟩ := withBytes_inv h
+  obtain ⟨r15, e15, h⟩ := withCookie_inv h
   by_cases hc : (op = 1 ∨ op = 2) ∧ hlen ≤ 16
-  · rw [if_pos hc] at h
-    simp only [Option.some.injEq, Prod.mk.injEq] at h
-    obtain ⟨rfl, rfl⟩ := h
-    refine ⟨?_, (getBytes_inv h12).1, (getBytes_inv h13).1,
-      (getBytes_inv h14).1⟩
-    rw [getU8_inv h1, getU8_inv h2, getU8_inv h3, getU8_inv h4,
-      (getU32_inv h5).1, (getU16_inv h6).1, (getU16_inv h7).1,
-      (getU32_inv h8).1, (getU32_inv h9).1, (getU32_inv h10).1,
-      (getU32_inv h11).1, (getBytes_inv h12).2,
-      (getBytes_inv h13).2, (getBytes_inv h14).2,
-      getCookie_inv h15]
+  · rw [ite_eq_left hc] at h
+    cases h
+    refine ⟨?_, l12, l13, l14⟩
+    rw [e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11, e12, e13,
+      e14, e15]
     simp only [printFixed, ← List.append_assoc, List.cons_append,
       List.nil_append]
-  · rw [if_neg hc] at h
-    simp at h
+  · rw [ite_eq_right hc] at h
+    cases h
 
 /-! ## The options -/
 

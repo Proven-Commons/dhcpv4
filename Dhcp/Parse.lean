@@ -37,55 +37,74 @@ import Dhcp.Value
 
 namespace Dhcp
 
-/-- Read one byte as a value, with the rest of the input. -/
-def getU8 : List UInt8 → Option (Nat × List UInt8)
-  | b :: rest => some (b.toNat, rest)
+/-! The fixed fields are read with the five readers below.
+Each one reads a field off the front of the input and goes on
+with the field's value and the rest of the input, or gives
+`none` when the input is too short or, for the cookie, wrong.
+Writing the fixed part this way keeps each step of its proofs
+a rewrite with one reader lemma, which every kernel bundled
+with Lean checks quickly. -/
+
+/-- Read one byte, then go on with its value and the rest of
+    the input. No byte gives `none`. -/
+def withU8 {α : Type} (bs : List UInt8)
+    (k : Nat → List UInt8 → Option α) : Option α :=
+  match bs with
+  | b :: rest => k b.toNat rest
   | [] => none
 
-/-- Read two bytes as a big endian value, with the rest of
-    the input. Fewer than two bytes gives `none`. -/
-def getU16 : List UInt8 → Option (Nat × List UInt8)
-  | a :: b :: rest => some (u16 a b, rest)
+/-- Read two bytes as a big endian value, then go on with the
+    value and the rest of the input. Fewer than two bytes give
+    `none`. -/
+def withU16 {α : Type} (bs : List UInt8)
+    (k : Nat → List UInt8 → Option α) : Option α :=
+  match bs with
+  | a :: b :: rest => k (u16 a b) rest
   | _ => none
 
-/-- Read four bytes as a big endian value, with the rest of
-    the input. Fewer than four bytes gives `none`. -/
-def getU32 : List UInt8 → Option (Nat × List UInt8)
-  | a :: b :: c :: d :: rest => some (u32 a b c d, rest)
+/-- Read four bytes as a big endian value, then go on with the
+    value and the rest of the input. Fewer than four bytes give
+    `none`. -/
+def withU32 {α : Type} (bs : List UInt8)
+    (k : Nat → List UInt8 → Option α) : Option α :=
+  match bs with
+  | a :: b :: c :: d :: rest => k (u32 a b c d) rest
   | _ => none
 
-/-- Read `n` bytes as a block, with the rest of the input.
-    Fewer than `n` bytes gives `none`. -/
-def getBytes (n : Nat) (bs : List UInt8) :
-    Option (List UInt8 × List UInt8) :=
-  if (bs.take n).length = n then some (bs.take n, bs.drop n)
+/-- Read `n` bytes as a block, then go on with the block and
+    the rest of the input. Fewer than `n` bytes give `none`. -/
+def withBytes {α : Type} (n : Nat) (bs : List UInt8)
+    (k : List UInt8 → List UInt8 → Option α) : Option α :=
+  if (bs.take n).length = n then k (bs.take n) (bs.drop n)
   else none
 
-/-- Read the magic cookie. Returns the rest of the input, or
-    `none` when the next four bytes are not 99, 130, 83, 99. -/
-def getCookie (bs : List UInt8) : Option (List UInt8) :=
-  if bs.take 4 = cookie then some (bs.drop 4) else none
+/-- Read the magic cookie, then go on with the rest of the
+    input. Gives `none` when the next four bytes are not 99,
+    130, 83, 99. -/
+def withCookie {α : Type} (bs : List UInt8)
+    (k : List UInt8 → Option α) : Option α :=
+  if bs.take 4 = cookie then k (bs.drop 4) else none
 
 /-- Read the fixed fields and the cookie. Returns the fields
     and the input after the cookie. The field checks are op
     in {1, 2} and hlen at most 16; a failed check gives
     `none`. -/
 def parseFixed (bs : List UInt8) : Option (Fixed × List UInt8) :=
-  getU8 bs >>= fun (op, r1) =>
-  getU8 r1 >>= fun (htype, r2) =>
-  getU8 r2 >>= fun (hlen, r3) =>
-  getU8 r3 >>= fun (hops, r4) =>
-  getU32 r4 >>= fun (xid, r5) =>
-  getU16 r5 >>= fun (secs, r6) =>
-  getU16 r6 >>= fun (flags, r7) =>
-  getU32 r7 >>= fun (ciaddr, r8) =>
-  getU32 r8 >>= fun (yiaddr, r9) =>
-  getU32 r9 >>= fun (siaddr, r10) =>
-  getU32 r10 >>= fun (giaddr, r11) =>
-  getBytes 16 r11 >>= fun (chaddr, r12) =>
-  getBytes 64 r12 >>= fun (sname, r13) =>
-  getBytes 128 r13 >>= fun (file, r14) =>
-  getCookie r14 >>= fun r15 =>
+  withU8 bs fun op r1 =>
+  withU8 r1 fun htype r2 =>
+  withU8 r2 fun hlen r3 =>
+  withU8 r3 fun hops r4 =>
+  withU32 r4 fun xid r5 =>
+  withU16 r5 fun secs r6 =>
+  withU16 r6 fun flags r7 =>
+  withU32 r7 fun ciaddr r8 =>
+  withU32 r8 fun yiaddr r9 =>
+  withU32 r9 fun siaddr r10 =>
+  withU32 r10 fun giaddr r11 =>
+  withBytes 16 r11 fun chaddr r12 =>
+  withBytes 64 r12 fun sname r13 =>
+  withBytes 128 r13 fun file r14 =>
+  withCookie r14 fun r15 =>
   if (op = 1 ∨ op = 2) ∧ hlen ≤ 16 then
     some (⟨op, htype, hlen, hops, xid, secs, flags, ciaddr,
       yiaddr, siaddr, giaddr, chaddr, sname, file⟩, r15)

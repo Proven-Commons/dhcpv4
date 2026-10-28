@@ -7,7 +7,7 @@ name = "dhcpv4"
 status = "in-progress"
 page = "README.md"
 # GitHub handles of everyone who wrote the specification.
-spec_authors = ["abu-aska"]
+spec_authors = ["abu-aska", "zero-aska"]
 # The program people run. A change to it voids the approval.
 entry_points = ["Main.lean"]
 
@@ -27,8 +27,8 @@ code = [
   # Well formedness.
   "Dhcp.WFFixed", "Dhcp.WFOptions", "Dhcp.WF",
   # The length checked readers and the parser.
-  "Dhcp.getU8", "Dhcp.getU16", "Dhcp.getU32", "Dhcp.getBytes",
-  "Dhcp.getCookie", "Dhcp.parseFixed", "Dhcp.parseOptionsGo",
+  "Dhcp.withU8", "Dhcp.withU16", "Dhcp.withU32", "Dhcp.withBytes",
+  "Dhcp.withCookie", "Dhcp.parseFixed", "Dhcp.parseOptionsGo",
   "Dhcp.parseOptions", "Dhcp.check53", "Dhcp.parse",
 ]
 
