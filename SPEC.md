@@ -95,13 +95,69 @@ this slice reads. The rules:
 - Its length must be 1.
 - Its one value byte must run from 1 to 8: 1 DISCOVER, 2
   OFFER, 3 REQUEST, 4 DECLINE, 5 ACK, 6 NAK, 7 RELEASE, 8
-  INFORM.
+  INFORM. Any other value turns the message away, including
+  the registered types 9 to 18, which this slice refuses on
+  purpose (see the readings below).
 
 Every other option is carried uninterpreted, as its code
 and value bytes, in wire order. An option may repeat; the
-repeats are kept in order. No other option's value is
+repeats are kept in order as separate items, not joined
+(see the readings below). No other option's value is
 checked in this slice: not its length against any per option
 rule, and not its contents. That is the slice boundary.
+
+## Readings that depart from the RFCs
+
+Where this slice reads a message differently from RFC 2131,
+RFC 2132, RFC 3396, or the registered message types, the
+reading is a choice, listed here. Each one is what the
+parser does and what the tests check.
+
+- No end byte. RFC 2131 section 4.1 says "The last option
+  must always be the 'end' option." This parser is more
+  lenient: an option area with no end byte is taken when
+  its last item ends exactly at the last input byte, and
+  the reprint adds the end byte. Scapy 2.8.0 also decodes
+  such a message; other decoders may refuse it.
+- Bytes after the end byte. RFC 2132 section 3.2 says only
+  that the octets after the end option "should be filled
+  with pad options". This parser is stricter: any nonzero
+  byte after the end byte turns the message away, so a
+  message another decoder takes (Scapy 2.8.0 decodes it and
+  keeps the trailing bytes) is refused here.
+  `Spec.rejects_nonzero_after_end` pins this choice on one
+  input.
+- Option overload is not read. RFC 2131 section 4.1 and
+  RFC 2132 section 9.3 let option 52 say that the file and
+  sname fields carry further options, which a reader must
+  then interpret, file first, then sname. This slice never
+  reads file or sname as options: they are carried as byte
+  blocks, and option 52 is carried as an ordinary option.
+  So the message type comes from the options field alone.
+  A message whose options field holds one option 53 and
+  option 52, and whose file field holds a second option 53,
+  is taken with the type from the options field, where a
+  reader that follows option 52 would see two.
+- Repeated options are not joined. RFC 3396 section 7 (and
+  RFC 2131 section 4.1 before it) asks a reader to join the
+  values of repeated options into one. This slice keeps
+  each repeat as its own item, in wire order, and the
+  reprint writes them back the same way. For option 53 the
+  exactly once rule applies to the items as they stand: a
+  type split over two items, such as `53 0` then `53 1 1`,
+  turns the message away, where a reader that joins them
+  would see one type, DISCOVER.
+- Message types 9 to 18 are refused on purpose. They are
+  registered: 9 DHCPFORCERENEW (RFC 3203); 10
+  DHCPLEASEQUERY, 11 DHCPLEASEUNASSIGNED, 12
+  DHCPLEASEUNKNOWN, 13 DHCPLEASEACTIVE (RFC 4388); 14
+  DHCPBULKLEASEQUERY, 15 DHCPLEASEQUERYDONE (RFC 6926); 16
+  DHCPACTIVELEASEQUERY, 17 DHCPLEASEQUERYSTATUS, 18 DHCPTLS
+  (RFC 7724). The plan for this slice covers types 1 to 8
+  only, so a message of any of these types is turned away,
+  the same answer as for a malformed message.
+  `Spec.rejects_option_53_value_9` pins the refusal of
+  DHCPFORCERENEW on one input.
 
 ## Printing and the canonical form
 

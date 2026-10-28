@@ -263,8 +263,11 @@ theorem Spec.rejects_option_53_value_0 :
 
 
 /-- An option 53 with value 9 is refused: the value must
-    run from 1 to 8. This is the harness's
-    option-53-value-9 case. -/
+    run from 1 to 8. Value 9 is a registered message type,
+    DHCPFORCERENEW (RFC 3203). This slice refuses it on
+    purpose, as it does the other registered types 10 to 18,
+    since the plan covers types 1 to 8 only. This is the
+    harness's option-53-value-9 case. -/
 theorem Spec.rejects_option_53_value_9 :
     (parse ([      1, 1, 6, 0, 18, 52, 86, 120, 0, 0,
       128, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -391,9 +394,11 @@ theorem Spec.rejects_hlen_17 :
 
 
 /-- A nonzero byte after the end byte is refused: only
-    zero padding may follow it. This is the harness's
-    nonzero-after-end case, the DISCOVER with a 1 after
-    its end byte. -/
+    zero padding may follow it. This is a choice, stricter
+    than RFC 2132 section 3.2, which says only that the bytes
+    after the end option should be pad bytes. This is the
+    harness's nonzero-after-end case, the DISCOVER with a 1
+    after its end byte. -/
 theorem Spec.rejects_nonzero_after_end :
     (parse ([      1, 1, 6, 0, 18, 52, 86, 120, 0, 0,
       128, 0, 0, 0, 0, 0, 0, 0, 0, 0,

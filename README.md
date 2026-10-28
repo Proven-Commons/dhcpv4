@@ -71,11 +71,11 @@ where they end in `sorry`) and proved in
 | A message with no option 53, the message type, is refused. | `Spec.rejects_no_option_53` |
 | An option 53 of length 2 is refused: its length must be 1. | `Spec.rejects_option_53_length_2` |
 | An option 53 with value 0 is refused: the value must run from 1 to 8. | `Spec.rejects_option_53_value_0` |
-| An option 53 with value 9 is refused: the value must run from 1 to 8. | `Spec.rejects_option_53_value_9` |
+| An option 53 with value 9 is refused: the value must run from 1 to 8. Value 9 is DHCPFORCERENEW (RFC 3203), a registered type this slice refuses on purpose. | `Spec.rejects_option_53_value_9` |
 | A message with two option 53 items is refused: the message type stands exactly once. | `Spec.rejects_option_53_twice` |
 | A message with op 3 is refused: op must be 1 or 2. | `Spec.rejects_op_3` |
 | A message with hlen 17 is refused: the hardware address cannot be longer than the chaddr field. | `Spec.rejects_hlen_17` |
-| A nonzero byte after the end byte is refused: only zero padding may follow it. | `Spec.rejects_nonzero_after_end` |
+| A nonzero byte after the end byte is refused: only zero padding may follow it. This is stricter than RFC 2132 section 3.2, which says only that those bytes should be pad bytes. | `Spec.rejects_nonzero_after_end` |
 
 A message is well formed when op is 1 or 2, htype and hops
 fit one byte, hlen is at most 16, xid and the four
@@ -141,6 +141,21 @@ are about.
   document agree, not that either matches an independent
   reading of the RFCs. The hand-built fixed cases are
   written from RFC 2131 and RFC 2132 directly.
+- The readings in `SPEC.md` that depart from the RFCs,
+  listed there under "Readings that depart from the RFCs":
+  an option area with no end byte is taken, though RFC
+  2131 section 4.1 says the last option must be the end
+  option; a nonzero byte after the end byte is refused,
+  though RFC 2132 section 3.2 says only that those bytes
+  should be pad bytes; option overload (option 52) is not
+  read, so file and sname are never read as options and
+  the message type comes from the options field alone;
+  repeated options are not joined as RFC 3396 asks, so a
+  message type split over two items is refused; and the
+  registered message types 9 to 18 (RFC 3203, RFC 4388,
+  RFC 6926, RFC 7724) are refused on purpose. These are
+  choices, checked by the tests, not departures the proofs
+  rule out.
 - The meaning of any option except option 53. Every other
   option is carried as its code and value bytes, and no
   per option length or content rule is checked.

@@ -26,6 +26,11 @@
     INFORM. Any other option may repeat and is carried as its
     code and value bytes; no other option's value is read in
     this slice.
+  - Option 52 (overload) is not followed: sname and file are
+    carried as byte blocks and never read as options, and
+    repeated options are kept as separate items, not joined
+    as RFC 3396 asks. SPEC.md lists these readings and the
+    others that depart from the RFCs.
 
   `parseOptionsGo` takes a fuel count, one more than the
   length of the input at the top level, which is always

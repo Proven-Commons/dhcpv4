@@ -16,6 +16,14 @@ Four parts.
    field, an empty input, and an option area with nothing the
    message type rule can use).
 
+The readings SPEC.md lists as departing from the RFCs each
+have a case too (no end byte, bytes after the end byte,
+option 52 with a second option 53 in file or sname, a
+message type split over two items, a repeated option, and
+the registered types 9 to 18). For each, the harness checks
+that its oracle gives the verdict SPEC.md states, then that
+the tool agrees.
+
 Every `ok:` answer is also checked to be a well formed
 message, as `Spec.parse_wf` says: op 1 or 2, hlen at most
 16, the cookie at offset 236, codes from 1 to 254, and option
@@ -447,6 +455,69 @@ def fixed_cases():
     return cases
 
 
+def choice_cases():
+    """The readings SPEC.md lists under "Readings that depart
+    from the RFCs", each with the verdict the page states: True
+    when the message is taken, False when it is turned away."""
+    d = discover()
+    f = fixed_bytes(1, 1, 6, 0, 0x12345678, 0, 0x8000,
+                    0, 0, 0, 0, MAC, ZEROS64, ZEROS128)
+    cases = [
+        # RFC 2131 4.1: the last option must be the end option.
+        # Taken here.
+        ("no-end-byte", d[:-1], True),
+        # RFC 2132 3.2: the bytes after the end option should be
+        # pad bytes. A nonzero one is refused here.
+        ("bytes-after-end", d + bytes([0xDE, 0xAD, 0xBE, 0xEF]), False),
+    ]
+    # Option 52 says file (1), sname (2), or both (3) carry more
+    # options, and they hold a second option 53. Not read here:
+    # the type comes from the options field alone.
+    file_opts = bytes([53, 1, 3, 255]) + bytes(124)
+    sname_opts = bytes([53, 1, 5, 255]) + bytes(60)
+    for value, sname, file in [(1, ZEROS64, file_opts),
+                               (2, sname_opts, ZEROS128),
+                               (3, sname_opts, file_opts)]:
+        fo = fixed_bytes(1, 1, 6, 0, 0x12345678, 0, 0x8000,
+                         0, 0, 0, 0, MAC, sname, file)
+        cases.append((f"overload-{value}-second-53", fo + COOKIE
+                      + option_area([(53, bytes([1])),
+                                     (52, bytes([value]))]), True))
+    # RFC 3396: repeated options are joined. Not here, so a type
+    # split over two items is two option 53 items, refused.
+    cases.append(("option-53-split",
+                  f + COOKIE + option_area([(53, b""), (53, bytes([1]))]),
+                  False))
+    # Repeats of another option are kept as separate items.
+    cases.append(("option-55-repeated",
+                  f + COOKIE + option_area([(53, bytes([1])),
+                                            (55, bytes([1, 3])),
+                                            (55, bytes([6, 15]))]),
+                  True))
+    # The registered message types 9 to 18, refused on purpose.
+    for t in range(9, 19):
+        cases.append((f"registered-type-{t}",
+                      f + COOKIE + option_area([(53, bytes([t]))]),
+                      False))
+    return cases
+
+
+def run_choices():
+    tally = Tally()
+    cases = choice_cases()
+    answers, problems = ask_all([request(d) for _, d, _ in cases])
+    tally.failures += problems
+    for (label, data, taken), answer in zip(cases, answers):
+        if (oracle_parse(data) is not None) != taken:
+            tally.inputs += 1
+            tally.failures.append(
+                f"reading {label}: the harness oracle does not give the"
+                f" verdict SPEC.md states")
+            continue
+        tally.check(data, answer, f"reading {label}")
+    return tally
+
+
 def random_message(rng):
     op = rng.choice([1, 2])
     htype = rng.choice([1, 6, rng.randrange(256)])
@@ -771,6 +842,7 @@ def main():
 
     fixed = run_fixed()
     readme = run_readme()
+    choices = run_choices()
     rand = run_random(args.seed, args.count, args.raw_count)
     mut = run_mutations()
     scapy = run_scapy()
@@ -778,15 +850,15 @@ def main():
 
     failures = (
         fixed.failures + fixed.lines.failures + readme.failures
-        + rand.failures
+        + choices.failures + rand.failures
         + mut.failures + scapy.failures + malf.failures
     )
     total_in = (
-        fixed.inputs + fixed.lines.inputs + rand.inputs
+        fixed.inputs + fixed.lines.inputs + choices.inputs + rand.inputs
         + mut.inputs + scapy.inputs
     )
     total_agree = (
-        fixed.agreements + fixed.lines.agreements
+        fixed.agreements + fixed.lines.agreements + choices.agreements
         + rand.agreements + mut.agreements + scapy.agreements
     )
 
@@ -817,6 +889,9 @@ def main():
         f" {fixed.lines.agreements} of {fixed.lines.inputs}",
         f"- README example answered ok: with the same codes:"
         f" {readme.agreements} of {readme.inputs}",
+        f"- Readings that depart from the RFCs, with the verdict"
+        f" SPEC.md states: {choices.agreements} of {choices.inputs}"
+        f" agreements",
         f"- Random well formed messages: part of {rand.agreements} of"
         f" {rand.inputs} agreements in the random run (well formed"
         f" {args.count}, raw byte strings {args.raw_count})",
