@@ -10,6 +10,7 @@
 -/
 
 import Dhcp
+import Spec.Defs
 import Proofs.RoundTrip
 
 open Dhcp

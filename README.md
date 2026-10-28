@@ -4,17 +4,18 @@ Status: in progress
 
 A parser and printer for DHCPv4 wire messages, in Lean,
 following RFC 2131 (the message format) and RFC 2132 (the
-options). The definitions are in `Dhcp/Value.lean` (the
-data model, the printer, and the canonical form of an
-option area) and `Dhcp/Parse.lean` (the parser). The rules
-are written out in `SPEC.md`. This slice carries no lease
+options). The code is in `Dhcp/Value.lean` (the data
+model and the printer) and `Dhcp/Parse.lean` (the parser).
+The rules are written out in `SPEC.md`. This slice carries no lease
 state, handles no relay agent behaviour, and reads no
 DHCPv6.
 
 The statements a reviewer approves are in `Spec.lean`,
-with their proofs in `Proofs/SpecProofs.lean`. No reviewer
-has approved them yet, so this project is not called
-verified.
+with the definitions they use in `Spec/Defs.lean` (what a
+well formed message is, and the canonical form of an
+option area) and their proofs in `Proofs/SpecProofs.lean`.
+No reviewer has approved them yet, so this project is not
+called verified.
 
 ## How to run it
 

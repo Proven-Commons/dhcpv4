@@ -232,8 +232,10 @@ prints `error`. A line may end in LF or CR LF.
 ## Properties and their theorems
 
 Each property a reader can check in the page (`README.md`)
-names its theorem. The theorems are stated in `Spec.lean`
-and proved in `Proofs/SpecProofs.lean`, resting on the
+names its theorem. The theorems are stated in `Spec.lean`,
+with the definitions they use besides the code (`WF` and
+its parts, and `canonOptions`) in `Spec/Defs.lean`, and
+proved in `Proofs/SpecProofs.lean`, resting on the
 proofs in `Proofs/RoundTrip.lean`, where they are
 `Dhcp.Proofs.parse_print`, `Dhcp.Proofs.print_parse`, and
 `Dhcp.Proofs.parse_wf`. The refusal theorems are single

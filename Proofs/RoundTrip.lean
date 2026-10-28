@@ -11,9 +11,8 @@
     the input: the first 240 bytes as they stood (the fixed
     fields and the cookie stand unchanged under printing),
     then the options with pad bytes dropped and exactly one
-    end byte. `canonOptions`, in `Dhcp/Value.lean` beside
-    the printer, spells that canonical option area out as a
-    function.
+    end byte. `canonOptions`, in `Spec/Defs.lean`, spells
+    that canonical option area out as a function.
   - `parse_wf`: every message the parser takes is well
     formed, in the sense of `WF`.
 
@@ -29,6 +28,7 @@
 -/
 
 import Dhcp
+import Spec.Defs
 
 namespace Dhcp.Proofs
 

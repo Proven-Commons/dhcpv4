@@ -7,13 +7,14 @@
   checks that each one proves exactly the statement written
   here. The `sorry` below is expected in this file only.
 
-  The statements use only the definitions in
-  `Dhcp/Value.lean` and `Dhcp/Parse.lean`, the code under
-  proof named in `bar.toml`. No definition of their own is
-  needed, so this project has no `Spec/Defs.lean`.
+  The statements use the code under proof named in
+  `bar.toml`, in `Dhcp/Value.lean` and `Dhcp/Parse.lean`, and
+  the definitions in `Spec/Defs.lean`, part of the
+  specification: `WF` and its parts, and `canonOptions`.
 -/
 
 import Dhcp
+import Spec.Defs
 
 open Dhcp
 

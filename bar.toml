@@ -12,20 +12,24 @@ spec_authors = ["abu-aska", "zero-aska"]
 entry_points = ["Main.lean"]
 
 [spec]
-files = ["SPEC.md", "Spec.lean"]
+files = ["SPEC.md", "Spec.lean", "Spec/Defs.lean"]
 # The code under proof: the functions the statements are about.
+# WF, its parts and canonOptions only give the statements their
+# meaning, so they are in Spec/Defs.lean above, not here.
 code = [
-  # The data types the statements are about.
+  # The data types the statements are about, and the fields of
+  # the two structures, which WF in Spec/Defs.lean reads.
   "Dhcp.DhcpOption", "Dhcp.Fixed", "Dhcp.Message",
+  "Dhcp.Message.fixed", "Dhcp.Message.options",
+  "Dhcp.Fixed.op", "Dhcp.Fixed.htype", "Dhcp.Fixed.hlen",
+  "Dhcp.Fixed.hops", "Dhcp.Fixed.xid", "Dhcp.Fixed.secs",
+  "Dhcp.Fixed.flags", "Dhcp.Fixed.ciaddr", "Dhcp.Fixed.yiaddr",
+  "Dhcp.Fixed.siaddr", "Dhcp.Fixed.giaddr", "Dhcp.Fixed.chaddr",
+  "Dhcp.Fixed.sname", "Dhcp.Fixed.file",
   # The byte forms and the printer.
   "Dhcp.be16", "Dhcp.u16", "Dhcp.be32", "Dhcp.u32",
   "Dhcp.cookie", "Dhcp.printFixed", "Dhcp.printOptions",
   "Dhcp.print",
-  # The canonical form of an option area, which the
-  # print_parse statement is stated with.
-  "Dhcp.canonOptionsGo", "Dhcp.canonOptions",
-  # Well formedness.
-  "Dhcp.WFFixed", "Dhcp.WFOptions", "Dhcp.WF",
   # The length checked readers and the parser.
   "Dhcp.withU8", "Dhcp.withU16", "Dhcp.withU32", "Dhcp.withBytes",
   "Dhcp.withCookie", "Dhcp.parseFixed", "Dhcp.parseOptionsGo",
