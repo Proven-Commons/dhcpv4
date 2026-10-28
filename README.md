@@ -116,7 +116,11 @@ numbers both ways, the readers on printed forms and on
 read forms, the fixed fields both ways, the option reader
 on printed options, and the lemma that a read option area
 canonicalizes to the printed options of the value it read
-to.
+to. Under the soundness theorem, three lemmas there say
+that read fixed fields are well formed, that every option
+read has a code from 1 to 254 and a value of at most 255
+bytes, and that options passing the option 53 check hold
+option 53 once with a value from 1 to 8.
 
 The command line tool in `Main.lean` calls `Dhcp.parse`
 and `Dhcp.print` directly, the same functions the theorems
@@ -142,10 +146,9 @@ are about.
   oracles. No captures are available in this environment,
   so no capture corpus ran, and no Wireshark dissector
   judged any input; nothing in the results rests on
-  either. The outside
-  bytes in the tests came from Scapy, which built packets
-  with its BOOTP and DHCP layers; the harness oracle
-  settled every verdict on them.
+  either. The outside bytes in the tests came from Scapy,
+  which built packets with its BOOTP and DHCP layers; the
+  harness oracle settled every verdict on them.
 - Independence of the differential oracle. The Python
   oracle in the test harness is a reading of the same
   `SPEC.md` the parser was written from, so the
@@ -201,7 +204,8 @@ are about.
   RFC 2132 you intend. The proofs are about the parser and
   printer in this repo following each other exactly; the
   fidelity of the spec to the RFCs is a reading, pinned in
-  `SPEC.md` where the RFCs leave a choice open.
+  `SPEC.md` where the RFCs leave a choice open, and listed
+  there where it departs from them.
 - The Python oracle in `tests/run_tests.py` and the
   packets Scapy built. Both are evidence, not proof. The
   results file names the versions used, and states
@@ -229,6 +233,8 @@ are about.
    failures written to `tests/TEST-RESULTS.md`.
 3. `lake build`: the library, the proofs, and the tool
    build clean, and `lake env lean Proofs/Verify.lean`
-   prints the axiom list for the round trip theorems.
+   prints the axiom list for the round trip and soundness
+   theorems.
 4. Read `SPEC.md` against RFC 2131 and RFC 2132 and check
-   the pinned readings are the ones you want.
+   the pinned readings, and the readings that depart from
+   the RFCs, are the ones you want.

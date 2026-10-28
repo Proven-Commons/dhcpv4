@@ -230,13 +230,13 @@ names its theorem. The theorems are stated in `Spec.lean`
 and proved in `Proofs/SpecProofs.lean`, resting on the
 proofs in `Proofs/RoundTrip.lean`, where they are
 `Dhcp.Proofs.parse_print`, `Dhcp.Proofs.print_parse`, and
-`Dhcp.Proofs.parse_wf`.
-The refusal theorems are single inputs, one for each named
-rejection case in the test harness, so each row that starts
-"Example, one input" is proved for that input only, not as
-a general rule; the tests in `tests/` cover each rule on
-many more inputs. The test DISCOVER is the harness's
-DISCOVER, the 250 byte example request in `README.md`.
+`Dhcp.Proofs.parse_wf`. The refusal theorems are single
+inputs, one for each named rejection case in the test
+harness, so each row that starts "Example, one input" is
+proved for that input only, not as a general rule; the
+tests in `tests/` cover each rule on many more inputs. The
+test DISCOVER is the harness's DISCOVER, the 250 byte
+example request in `README.md`.
 
 | Property | Theorem |
 |----------|---------|

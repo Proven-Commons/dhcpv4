@@ -1,8 +1,8 @@
 /-
   The round trip proofs.
 
-  Two claims are proved here, matching the plan's main claim
-  and its mirror:
+  Three claims are proved here: the plan's main claim, its
+  mirror, and soundness:
 
   - `parse_print`: for every well formed message, parsing its
     printed form gives the message back.
@@ -14,6 +14,8 @@
     end byte. `canonOptions`, in `Dhcp/Value.lean` beside
     the printer, spells that canonical option area out as a
     function.
+  - `parse_wf`: every message the parser takes is well
+    formed, in the sense of `WF`.
 
   The steps: the two and four byte numbers read back as the
   values they were printed from, and printed numbers recover
@@ -21,7 +23,9 @@
   printed forms and on read forms; the fixed fields invert
   both ways; the option reader inverts on printed options;
   and the canonical form lemma ties a read option area to the
-  printed options of the value it read to.
+  printed options of the value it read to. For soundness, the
+  read fixed fields, each option read, and the option 53 check
+  each give their part of `WF`.
 -/
 
 import Dhcp
