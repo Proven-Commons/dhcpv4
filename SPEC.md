@@ -149,13 +149,15 @@ check.
   lenient: an option area with no end byte is taken when
   its last item ends exactly at the last input byte, and
   the reprint adds the end byte. Scapy 2.8.0 also decodes
-  such a message; other decoders may refuse it.
+  such a message; Wireshark 4.2.2 dissects it but reports
+  the expert error End option missing.
 - Bytes after the end byte. RFC 2132 section 3.2 says only
   that the octets after the end option "should be filled
   with pad options". This parser is stricter: any nonzero
   byte after the end byte turns the message away, so a
   message another decoder takes (Scapy 2.8.0 decodes it and
-  keeps the trailing bytes) is refused here.
+  keeps the trailing bytes, and Wireshark 4.2.2 shows them
+  as padding with no error) is refused here.
   `Spec.rejects_nonzero_after_end` pins this choice on one
   input.
 - Option overload is not read. RFC 2131 section 4.1 and
@@ -168,7 +170,9 @@ check.
   A message whose options field holds one option 53 and
   option 52, and whose file field holds a second option 53,
   is taken with the type from the options field, where a
-  reader that follows option 52 would see two.
+  reader that follows option 52 would see two. Wireshark
+  4.2.2 follows option 52: with value 1, 2 or 3 it reads
+  file or sname, or both, as options.
 - Repeated options are not joined. RFC 3396 section 7 (and
   RFC 2131 section 4.1 before it) asks a reader to join the
   values of repeated options into one. This slice keeps
@@ -177,7 +181,9 @@ check.
   exactly once rule applies to the items as they stand: a
   type split over two items, such as `53 0` then `53 1 1`,
   turns the message away, where a reader that joins them
-  would see one type, DISCOVER.
+  would see one type, DISCOVER. Wireshark 4.2.2 shows each
+  repeat as its own item too, and joins the values only of
+  repeated options 119 and 120, before it reads them.
 - Message types 9 to 18 are refused on purpose. They are
   registered: 9 DHCPFORCERENEW (RFC 3203); 10
   DHCPLEASEQUERY, 11 DHCPLEASEUNASSIGNED, 12
@@ -188,7 +194,8 @@ check.
   only, so a message of any of these types is turned away,
   the same answer as for a malformed message.
   `Spec.rejects_option_53_value_9` pins the refusal of
-  DHCPFORCERENEW on one input.
+  DHCPFORCERENEW on one input. Wireshark 4.2.2 reads these
+  types and reports no error for them.
 
 ## Printing and the canonical form
 
@@ -266,8 +273,56 @@ a nonzero byte after the end byte, a length that runs past
 the end, a code byte with no length byte, and the four
 option 53 rules. Each is an instance of
 `Spec.parse_accepts_iff`, kept as an example a reader can
-check. The differential tests in `tests/` check the
-behaviour on many more inputs.
+check. The tests in `tests/` check the behaviour on many
+more inputs (see The tests).
+
+## The tests
+
+`tests/run_tests.py` checks the tool against these rules on
+4,104 inputs (seed 20261026) and writes the outcome to
+`tests/TEST-RESULTS.md`. The committed record has 0
+failures. Its oracles:
+
+- The harness oracle, `oracle_parse`, a second reading of
+  these rules in Python, settles the verdict on every input:
+  the tool's answer must be the oracle's, byte for byte.
+- Scapy 2.8.0 built ten of the messages with its BOOTP and
+  DHCP layers; they are stored in `tests/scapy-packets.txt`.
+- Wireshark's DHCP/BOOTP dissector, TShark 4.2.2, reads all
+  4,090 messages among the inputs, the ones the tool takes
+  and the ones it turns away, each written by the harness as
+  the UDP payload of an Ethernet/IPv4/UDP frame in a pcap
+  file. For a message the tool takes, Wireshark must show
+  the fixed fields, the cookie, the options (code, length,
+  value), the end option and the message type as the tool
+  reads them; for every message, each Malformed Packet and
+  expert error must be one the harness finds in the bytes
+  by following Wireshark 4.2.2's own checks, and the other
+  way round. Where Wireshark reads a message differently
+  from these rules on purpose, the difference is a named
+  one, counted only when the harness finds its reason in the
+  message. Wireshark agrees on 2,056 messages: 635 the tool
+  takes, and 1,421 the tool turns away where Wireshark stops
+  with an exception at the same rule or finds no payload.
+  The other 2,034 differ only under named differences, with
+  these counts (a message can fall under more than one):
+  no end byte (no-end) 527; option 52 overload (overload)
+  105; an option other than 53 whose value fails Wireshark's
+  check for it (option-value) 1,056; hlen 0 (hlen-0) 128;
+  secs that look little endian (secs-le) 5; op not 1 or 2
+  (op) 392; hlen above 16 (hlen) 375; no cookie, read as
+  plain BOOTP (no-cookie) 371; nonzero bytes after the end
+  byte (after-end) 190; no option 53 (no-53) 58; option 53
+  more than once (53-repeated) 106; option 53 longer than
+  one byte (53-length) 54; types 9 to 18 (53-registered) 13;
+  type 0 or above 18 (53-unknown) 104. The results file
+  gives each reason in full.
+
+The plan (issue #1) also names ISC DHCP and dnsmasq
+captures as oracles. They are not used: neither program is
+available in this environment and no capture from either is
+at hand, so no capture corpus ran. They are the only oracle
+the plan names that the tests do not use.
 
 ## The command-line tool
 

@@ -48,9 +48,10 @@ message the parser turns away, such as the single code
 `python3 tests/run_tests.py` rebuilds the tool, runs the
 fixed cases, the README example above, the cases for the
 readings that depart from the RFCs, the differential run
-against the harness oracle, the Scapy cross check, and the
-mutation and malformed cases, and writes the outcome to
-`tests/TEST-RESULTS.md`. The Scapy cross check feeds the
+against the harness oracle, the Scapy cross check, the
+mutation and malformed cases, and the Wireshark cross
+check, and writes the outcome to `tests/TEST-RESULTS.md`.
+The Scapy cross check feeds the
 packets stored in `tests/scapy-packets.txt`, which Scapy
 built, so it runs the same with or without Scapy
 installed. To build them again,
@@ -58,6 +59,86 @@ installed. To build them again,
 from the interpreter running the harness, or from the
 virtual environment at `venv/` here; to make that venv, run
 `python3 -m venv venv` and `venv/bin/pip install scapy`.
+
+The Wireshark cross check runs Wireshark's DHCP/BOOTP
+dissector as an outside decoder on every message the other
+parts feed the tool, the ones it takes and the ones it turns
+away: the fixed cases, the README example, the readings
+cases, the random messages, raw byte strings and option
+areas, the mutations, and the Scapy packets. The harness
+writes each message as the UDP payload of an
+Ethernet/IPv4/UDP frame into a pcap file of its own, has
+`tshark` dissect the file in batches (`-T json`), and
+compares what Wireshark read with what the tool read: op,
+htype, hlen, hops, xid, secs, flags, ciaddr, yiaddr, siaddr,
+giaddr, chaddr, sname, file, the cookie, each option's code,
+length and value, the end option and what follows it, and
+the message type; and, for every message, whether Wireshark
+marks the frame Malformed Packet, where it stops, and which
+expert errors it reports.
+
+Wireshark does not read a message the way `SPEC.md` does:
+it wants the end option, reads option 52 overload, joins
+repeated options 119 and 120 (RFC 3396), checks the values
+of options this slice carries unread, and takes messages
+this slice turns away, such as the registered types 9 to 18
+or a message with nonzero bytes after the end option. So
+each difference must be either agreement or a named
+difference whose reason the harness finds in the message's
+bytes. For the fixed fields and option 53 it reads the
+bytes by the rules of `SPEC.md`. For each fault Wireshark
+reports, it finds the same fault by following the checks
+of Wireshark 4.2.2's dissector, which it carries as
+`WsModel` in `tests/run_tests.py`, written from that
+dissector's source code; a fault that either side finds
+and the other does not is a failure, except in the one
+option whose checks the model follows only in part (122,
+listed in the results file). A message the tool turns away
+agrees with Wireshark only when Wireshark stops with an
+exception at the rule the tool turns it away for. Any other
+difference is a failure.
+
+The committed record was made with TShark 4.2.2 on the
+4,090 messages of the run with seed 20261026 (the other 14
+inputs are request lines with no message), with 0
+failures:
+
+- The tool takes 1,918 messages. Wireshark agrees on 635
+  and differs only under named differences on 1,283.
+- The tool turns away 2,172. Wireshark agrees on 1,421: it
+  stops with an exception where the message is too short
+  (1,071), an option runs past the end (127), a code byte
+  has no length byte (120), or option 53 has length 0 (97),
+  or it finds no payload (6). It differs only under named
+  differences on 751.
+
+| Named difference | Messages | Where Wireshark and `SPEC.md` part |
+|------------------|----------|-----------------------------------|
+| no-end | 527 | no end byte: Wireshark reports End option missing; `SPEC.md` takes the message |
+| overload | 105 | option 52: Wireshark hides sname or file, or reads them as options |
+| option-value | 1,056 | an option other than 53 whose value fails the check Wireshark applies to that option; `SPEC.md` does not read it |
+| hlen-0 | 128 | hlen 0: Wireshark shows no hardware address |
+| secs-le | 5 | secs that look little endian: Wireshark shows them swapped |
+| op | 392 | op not 1 or 2: Wireshark reports no error |
+| hlen | 375 | hlen above 16: Wireshark reports no error, or stops reading a request's hlen bytes |
+| no-cookie | 371 | no cookie: Wireshark reads plain BOOTP |
+| after-end | 190 | nonzero bytes after the end byte: Wireshark shows them as padding |
+| no-53 | 58 | no option 53: Wireshark reads plain BOOTP |
+| 53-repeated | 106 | option 53 more than once: Wireshark reads each |
+| 53-length | 54 | option 53 longer than one byte: Wireshark reads its first byte |
+| 53-registered | 13 | types 9 to 18: Wireshark names them |
+| 53-unknown | 104 | type 0 or above 18: Wireshark shows Unknown Message Type |
+
+A message can fall under more than one. The results file
+gives each reason in full and, under option-value, overload
+and no-cookie, what the harness found, by option code.
+
+The part needs `tshark` on `PATH`; without it the record
+says the part did not run, and `--require-wireshark` makes
+that a failure. Where CI's runner has no `tshark`, CI's
+rerun skips this part; the input count and the failure
+count it checks are the same either way, since the part
+judges the same messages and a clean run adds no failure.
 
 ## What is proved
 
@@ -167,22 +248,34 @@ are about.
   reading, which the reviewer checks and the differential
   tests in `tests/` probe from the other side, with an
   oracle written from the words.
-- A capture based differential, and a differential
-  against an outside decoder. The plan names ISC DHCP and
-  dnsmasq captures and the Wireshark dissectors as
-  oracles. No captures are available in this environment,
-  so no capture corpus ran, and no Wireshark dissector
-  judged any input; nothing in the results rests on
-  either. The outside bytes in the tests came from Scapy,
-  which built packets with its BOOTP and DHCP layers; the
-  harness oracle settled every verdict on them.
-- Independence of the differential oracle. The Python
-  oracle in the test harness is a reading of the same
-  `SPEC.md` the parser was written from, so the
-  differential run checks that two readings of one
-  document agree, not that either matches an independent
-  reading of the RFCs. The hand-built fixed cases are
-  written from RFC 2131 and RFC 2132 directly.
+- A capture based differential. The plan in issue #1
+  names ISC DHCP and dnsmasq captures, the Scapy packet
+  builder, and the Wireshark dissectors as oracles. Scapy
+  and Wireshark are used (see How to run it). ISC DHCP and
+  dnsmasq captures are still not used: neither ISC DHCP nor
+  dnsmasq is available in this environment, and no capture
+  from either is at hand, so no capture corpus ran and
+  nothing in the results rests on one. Of the plan's
+  oracles, these captures are the only ones missing, so the
+  open waiver question is about them alone. The messages
+  Wireshark judged are the test messages, built by hand, by
+  the harness's random and mutation generators, and by
+  Scapy, not traffic that a DHCP server or client sent.
+- Independence of the differential oracle, in part. The
+  Python oracle in the test harness is a reading of the
+  same `SPEC.md` the parser was written from, so the
+  differential run against it checks that two readings of
+  one document agree. Wireshark's dissector is an outside
+  reading, but it is not an oracle for the verdict: it
+  reads many messages this slice turns away, and turns away
+  some this slice takes, on purpose. The harness names each
+  such difference with the reason it finds in the message,
+  and checks each fault against its account of Wireshark's
+  checks (`WsModel`), both ways; that account is written
+  from Wireshark's code, and that the named differences are
+  the right ones to accept is a reading a reviewer checks.
+  The hand-built fixed cases are written from RFC 2131 and
+  RFC 2132 directly.
 - The readings in `SPEC.md` that depart from the RFCs,
   listed there under "Readings that depart from the RFCs":
   an option area with no end byte is taken, though RFC
@@ -238,8 +331,11 @@ are about.
   there where it departs from them. Likewise, that the
   rules in `Spec/Defs.lean` are the rules `SPEC.md` states
   in words.
-- The Python oracle in `tests/run_tests.py` and the
-  packets Scapy built. Both are evidence, not proof. The
+- The Python oracle in `tests/run_tests.py`, the packets
+  Scapy built, and Wireshark's DHCP/BOOTP dissector (TShark
+  4.2.2 for the committed record) with the harness code
+  that reads its output and its account of Wireshark's
+  checks, `WsModel`. All are evidence, not proof. The
   results file names the versions used, and states
   plainly which oracles were and were not available.
 - The line handling in `Main.lean` (splitting a request
@@ -260,9 +356,11 @@ are about.
 2. `python3 tests/run_tests.py`: the fixed cases, the
    README example, the cases for the readings that depart
    from the RFCs, the differential against the harness
-   oracle, the Scapy cross check, and the mutation and
-   malformed cases, with the seed, the input count and any
-   failures written to `tests/TEST-RESULTS.md`.
+   oracle, the Scapy cross check, the mutation and
+   malformed cases, and, with `tshark` installed, the
+   Wireshark cross check, with the seed, the input count,
+   Wireshark's version, its counts and named differences,
+   and any failures written to `tests/TEST-RESULTS.md`.
 3. `lake build`: the library, the proofs, and the tool
    build clean, and `lake env lean Proofs/Verify.lean`
    prints the axiom list for the round trip and soundness

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for the Lean DHCPv4 wire message parser and printer.
 
-Four parts.
+Five parts.
 
 1. Fixed cases built by hand from RFC 2131 and RFC 2132: a
    DISCOVER, an OFFER, a REQUEST, an ACK, a RELEASE, and an
@@ -39,11 +39,48 @@ Four parts.
    them, so every run feeds the same inputs whether or not
    Scapy is installed; `--rebuild-scapy` rebuilds the file
    with Scapy from this interpreter or from the project venv
-   at ../venv. No ISC DHCP or dnsmasq captures were available
-   in this environment, so no capture corpus was run; the
-   record says so too.
+   at ../venv. Neither ISC DHCP nor dnsmasq is installed in
+   this environment, and no capture from either is available,
+   so no capture corpus was run; the record says so too.
 
 4. Malformed request lines must be answered `error`.
+
+5. A Wireshark cross check: every message the parts above
+   feed the tool, taken and turned away alike, is written by
+   this script as the UDP payload of an Ethernet/IPv4/UDP
+   frame (port 68 to 67, or 67 to 68 for op 2) into a pcap
+   file, and dissected in batches by Wireshark's DHCP/BOOTP
+   dissector with `tshark -n -r FILE -T json -x`. For a
+   message the tool takes, Wireshark must show op, htype,
+   hlen, hops, xid, secs, flags, ciaddr, yiaddr, siaddr,
+   giaddr, chaddr, sname, file and the cookie as the tool's
+   reprint holds them, read at the offsets SPEC.md gives;
+   the same options, code, length and value bytes, in order;
+   the same end option and bytes after it; the same message
+   type; and no Malformed Packet mark and no expert error.
+   For a message the tool turns away, Wireshark must stop
+   with an exception at a rule the tool turns it away for
+   (WS_AGREE), or find no payload. Where Wireshark 4.2 reads
+   a message differently from SPEC.md on purpose, the
+   difference is a named one (WS_NAMED). The harness finds
+   the reason for each in the message's bytes: the fixed
+   fields and option 53 as SPEC.md reads them, and, for each
+   fault Wireshark reports, the same fault in WsModel, the
+   harness's account of what Wireshark 4.2.2's dissector does
+   with those bytes, written from its code (packet-dhcp.c,
+   and get_dns_name in packet-dns.c, at tag v4.2.2). Each
+   Malformed Packet must be one the model finds, at the same
+   option, and each expert error one the model finds in the
+   same option, and the other way round, except for the
+   options the model follows only in part (WS_PARTIAL). For a
+   message the tool turns away, each rule it breaks that
+   Wireshark's dissection reaches must show in Wireshark's
+   own reading too. Every other difference is a failure. The
+   record lists the named differences this run found, each
+   with its count, and what the harness found under each.
+   The part runs when tshark is on PATH; without it the
+   record says the part did not run, and
+   `--require-wireshark` makes that a failure.
 
 Two more line checks stand apart from the fixed cases of
 part 1: the requests `parse ` and `parse`, with no codes,
@@ -68,6 +105,7 @@ message, as `Spec.parse_wf` says: op 1 or 2, hlen at most
 
     python3 tests/run_tests.py [--seed N] [--count N]
         [--raw-count N] [--area-count N] [--rebuild-scapy]
+        [--require-wireshark]
 
 The tool is driven one batch process per chunk of requests,
 input written and closed, output drained until the process
@@ -77,10 +115,15 @@ It needs Python 3.11 or later.
 """
 
 import argparse
+import json
+import os
 import platform
 import random
+import shutil
+import struct
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -320,9 +363,13 @@ class Tally:
         self.inputs = 0
         self.agreements = 0
         self.failures = []
+        # Every message checked, with the tool's answer, for the
+        # Wireshark cross check (part 5).
+        self.messages = []
 
     def check(self, data, answer, label):
         self.inputs += 1
+        self.messages.append((label, bytes(data), answer))
         want = expected(data)
         problem = reprint_problem(str(answer))
         if answer == want and problem is None:
@@ -623,6 +670,11 @@ def run_readme():
     for answer in answers:
         tally.check_line("README example", answer, "ok:" + arg,
                          "README example")
+        try:
+            message = bytes(int(x) for x in arg.split(","))
+        except ValueError:
+            continue
+        tally.messages.append(("README example", message, answer))
     return tally
 
 
@@ -936,6 +988,1687 @@ def run_malformed():
     return tally
 
 
+# ---------------------------------------------------------------- the
+# Wireshark cross check (part 5): every message above, dissected by
+# Wireshark's DHCP/BOOTP dissector through tshark, and compared with the
+# tool's answer.
+#
+# Two accounts of each message meet here. Wireshark's own, read from
+# tshark's JSON (ws_reading). And the harness's account of what that
+# dissector does with the same bytes (WsModel): where it stops with an
+# exception, which expert errors it reports, and why. The model follows
+# the dissector's code in Wireshark 4.2.2 (epan/dissectors/packet-dhcp.c,
+# and get_dns_name in packet-dns.c, at tag v4.2.2) and is computed from
+# the message's bytes alone. It gives each difference its reason; it is
+# not trusted on its own. A fault Wireshark reports that the model does
+# not find in the message is a failure, and so is a fault the model
+# finds that Wireshark does not report, unless the option is one whose
+# checks the model does not follow in full (WS_PARTIAL).
+
+WS_BATCH = 500
+# Ethernet (14 bytes), IPv4 (20) and UDP (8) come before the message
+# in each frame, so a message byte at offset n is frame byte n + 42.
+WS_PAYLOAD = 42
+# The severity Wireshark gives an expert error (PI_ERROR). Notes and
+# warnings are lower, and are not faults.
+WS_ERROR = 0x00800000
+
+# The fixed fields, with the offset and size SPEC.md gives each one:
+# Wireshark must read each at the same place.
+WS_FIXED = {
+    "dhcp.type": ("op", 0, 1),
+    "dhcp.hw.type": ("htype", 1, 1),
+    "dhcp.hw.len": ("hlen", 2, 1),
+    "dhcp.hops": ("hops", 3, 1),
+    "dhcp.id": ("xid", 4, 4),
+    "dhcp.secs": ("secs", 8, 2),
+    "dhcp.flags": ("flags", 10, 2),
+    "dhcp.ip.client": ("ciaddr", 12, 4),
+    "dhcp.ip.your": ("yiaddr", 16, 4),
+    "dhcp.ip.server": ("siaddr", 20, 4),
+    "dhcp.ip.relay": ("giaddr", 24, 4),
+    "dhcp.server": ("sname", 44, 64),
+    "dhcp.file": ("file", 108, 128),
+    "dhcp.cookie": ("cookie", 236, 4),
+}
+WS_CHADDR = ("dhcp.hw.mac_addr", "dhcp.hw.addr", "dhcp.hw.addr_padding")
+
+# The named differences: each is a place where Wireshark 4.2 and
+# SPEC.md read a message differently on purpose. A message is put
+# under one only when the harness finds the reason in the message
+# itself; any other difference is a failure.
+WS_NAMED = {
+    "no-end": (
+        "the option area has no end byte: Wireshark reports the expert"
+        " error End option missing (it does so when the message has an"
+        " option 53), as RFC 2131 section 4.1 says the last option must"
+        " be the end option; SPEC.md takes such a message (No end byte,"
+        " under Readings that depart from the RFCs)"),
+    "overload": (
+        "option 52: Wireshark takes the byte after the length byte of"
+        " the last option 52 (its first value byte) for the overload"
+        " value; where its 2 bit (sname) or 1 bit (file) is set, it"
+        " shows no sname or file text, and when the byte is 1, 2 or 3"
+        " (the values RFC 2132 section 9.3 defines) it reads those"
+        " fields as more options, with faults of their own (an option"
+        " whose value fails its check, no end option in the field); an"
+        " option 52 of length 0 as the last bytes of the message makes"
+        " it read past the end; SPEC.md carries file and sname as bytes"
+        " and option 52 as an ordinary option (Option overload is not"
+        " read)"),
+    "option-value": (
+        "an option other than 53 whose value Wireshark checks against"
+        " that option's own definition, and the value fails the check"
+        " the harness applies (the length the definition needs, or the"
+        " structure inside the value, as listed below): Wireshark"
+        " reports an expert error, or stops with an exception (Malformed"
+        " Packet) inside that option; SPEC.md carries every option but"
+        " 53 as code and value bytes, unchecked (the slice boundary,"
+        " under Option 53)"),
+    "joined": (
+        "options 119 or 120 more than once: Wireshark joins their values"
+        " into one before reading them, as RFC 3396 asks, and the joined"
+        " value fails its check; SPEC.md keeps each item as it stands"
+        " (Repeated options are not joined)"),
+    "hlen-0": (
+        "hlen 0: Wireshark shows no client hardware address, only the"
+        " note Client address not given; SPEC.md carries the 16 chaddr"
+        " bytes as they stand, so there is nothing of Wireshark's to"
+        " compare them with"),
+    "secs-le": (
+        "secs whose first byte is nonzero and second byte is 0:"
+        " Wireshark takes the field for a little endian value, shows"
+        " the bytes swapped, and adds the note Seconds elapsed appears"
+        " to be encoded as little-endian; SPEC.md reads secs big"
+        " endian, as RFC 2131 lays the field out"),
+    "op": (
+        "op is not 1 or 2: Wireshark shows the value and reports no"
+        " error; SPEC.md turns the message away (The fixed fields)"),
+    "hlen": (
+        "hlen above 16: Wireshark shows no client hardware address and"
+        " reports a note, not an error, except in a request (op 1)"
+        " whose hlen bytes from offset 28 run past the end of the"
+        " message, where it stops with an exception before it shows"
+        " anything, as it reads them first; SPEC.md turns the message"
+        " away (The fixed fields)"),
+    "no-cookie": (
+        "no DHCP cookie at offset 236: Wireshark reads the message as"
+        " plain BOOTP (RFC 951), with a 64 byte vendor area at offset"
+        " 236 and options after it, from offset 300, so a message"
+        " shorter than 300 bytes ends inside that area (Malformed"
+        " Packet), and any fault it finds in the options from offset"
+        " 300 is its own; SPEC.md turns the message away (The fixed"
+        " fields)"),
+    "after-end": (
+        "a nonzero byte after the end byte: Wireshark shows the bytes"
+        " after the end option as padding and reports no error (RFC"
+        " 2132 section 3.2 says only that they should be pad bytes);"
+        " SPEC.md turns the message away (Bytes after the end byte)"),
+    "no-53": (
+        "no option 53: Wireshark reads a BOOTP message with vendor"
+        " extensions (it marks it dhcp.bootp) and reports no error;"
+        " SPEC.md turns the message away, as the plan requires option"
+        " 53 (Option 53)"),
+    "53-repeated": (
+        "option 53 more than once: Wireshark reads each one and reports"
+        " no error; SPEC.md turns the message away (Option 53: exactly"
+        " once; Repeated options are not joined)"),
+    "53-length": (
+        "option 53 longer than one byte: Wireshark reads its first"
+        " value byte as the type and reports no error; SPEC.md turns"
+        " the message away (Option 53: length 1)"),
+    "53-registered": (
+        "option 53 value 9 to 18: Wireshark reads these registered"
+        " types (Force Renew to TLS) and reports no error; SPEC.md"
+        " refuses them on purpose (Message types 9 to 18 are refused"
+        " on purpose)"),
+    "53-unknown": (
+        "option 53 value 0, or above 18: Wireshark shows Unknown"
+        " Message Type and reports no error; SPEC.md turns the message"
+        " away (Option 53: 1 to 8)"),
+}
+# The rules of SPEC.md at which Wireshark also faults a message, when
+# its dissection gets there: a message the tool turns away for one of
+# these agrees with Wireshark when Wireshark stops there.
+WS_AGREE = {
+    "short": "the message is shorter than the fixed fields and the"
+             " cookie, and Wireshark stops with an exception before any"
+             " option",
+    "overrun": "an option runs past the end of the message, and"
+               " Wireshark stops with an exception at that option",
+    "code-last": "the last byte is an option code with no length byte,"
+                 " and Wireshark stops with an exception there",
+    "53-empty": "option 53 has length 0, and Wireshark stops with an"
+                " exception reading the type byte",
+}
+
+
+# ---------------------------------------------------------------- the
+# model: what Wireshark 4.2.2's dissector does with a message.
+
+class WsStop(Exception):
+    """The dissector stops with an exception, shown as Malformed
+    Packet; `what` says why."""
+
+    def __init__(self, what, reason=None):
+        super().__init__(what)
+        self.what = what
+        self.reason = reason
+
+
+def ws_need(value, end, what):
+    """The dissector reads up to byte `end` of a value; past its end it
+    stops with an exception."""
+    if end > len(value):
+        raise WsStop(what)
+
+
+def ws_dns_name(buf, offset, max_len, base):
+    """The bytes one DNS name takes, as get_dns_name in Wireshark
+    4.2.2's packet-dns.c reads it from `buf` at `offset` (with its
+    compression pointers counted from `base`); WsStop where it throws."""
+    start, length, pointers = offset, -1, 0
+    written, name_len, room = 0, 0, 255
+    found = None  # a name Wireshark puts in place of the one it reads
+
+    def get(i):
+        if not 0 <= i < len(buf):
+            raise WsStop("a domain name runs past the value")
+        return buf[i]
+
+    def put(count):
+        nonlocal written, room
+        if room > 0:
+            written, room = (written + count, room - count) \
+                if room >= count else (written, 0)
+
+    while True:
+        if max_len and offset - start > max_len - 1:
+            break
+        c = get(offset)
+        offset += 1
+        if c == 0:
+            break
+        if c & 0xC0 == 0x00:
+            if written:
+                if room > 0:
+                    written, name_len, room = written + 1, name_len + 1, room - 1
+            else:
+                room -= 1
+            while c > 0:
+                if max_len and offset - start > max_len - 1:
+                    raise WsStop("a domain name label runs past the room"
+                                 " the name has")
+                if room > 0:
+                    get(offset)
+                    written, name_len, room = written + 1, name_len + 1, room - 1
+                c -= 1
+                offset += 1
+        elif c & 0xC0 == 0x40:
+            if c & 0x3F != 0x01:
+                found = "<Unknown extended label>"
+                length = offset - start
+                break
+            bits = get(offset)
+            offset += 1
+            put(3)
+            for _ in range(int((bits - 1) / 8) + 1):  # C division
+                if room > 0:
+                    get(offset)
+                    put(2)
+                offset += 1
+            put(len(f"/{bits}]"))
+        elif c & 0xC0 == 0x80:
+            raise WsStop("a domain name label of the reserved type 0x80")
+        else:
+            target = base + (((c & 0x3F) << 8) | get(offset))
+            offset += 1
+            pointers += 1
+            if length < 0:
+                length = offset - start
+            if target == offset + 2 or pointers > 255:
+                found = "<Name contains a pointer that loops>"
+                break
+            offset = target
+    if found is None and room <= 0:
+        found = "<Name too long>"
+    empty = found is None and written == 0
+    if found is not None:
+        name_len = len(found)
+    if length < 0:
+        length = offset - start
+    if empty and length <= 2:
+        return length
+    if length < 2 or (length > 2 and name_len == 0):
+        raise WsStop("a domain name Wireshark cannot read")
+    return length
+
+
+# Options Wireshark 4.2.2 reads with its basic types
+# (DHCP_OPTION_BASICTYPE_RANGE and default_dhcp_opt in packet-dhcp.c),
+# as (is or multiple, n, what): a value of exactly n bytes, or a whole
+# number of n byte items. A value of another length draws the expert
+# error dhcp.bad_length. The strings in that range have no check.
+WS_BASIC = {}
+for _c in (1, 16, 28, 32, 50, 54):
+    WS_BASIC[_c] = ("is", 4, "an IPv4 address")
+for _c in (2, 24, 35, 38, 51, 58, 59, 91, 153):
+    WS_BASIC[_c] = ("is", 4, "a time in seconds")
+for _c in (3, 4, 5, 6, 7, 8, 9, 10, 11, 41, 42, 44, 45, 48, 49, 65, 68,
+           69, 70, 71, 72, 73, 74, 75, 76, 92, 112, 118, 136, 138, 142,
+           150):
+    WS_BASIC[_c] = ("multiple", 4, "IPv4 addresses")
+for _c in (19, 20, 27, 29, 30, 31, 34, 36, 39, 157):
+    WS_BASIC[_c] = ("is", 1, "a boolean")
+for _c in (23, 37, 46, 116, 156):
+    WS_BASIC[_c] = ("is", 1, "a byte")
+for _c in (13, 22, 26, 57):
+    WS_BASIC[_c] = ("is", 2, "a 16 bit number")
+WS_BASIC[25] = ("multiple", 2, "16 bit numbers")
+# Options whose own dissectors check only a length, the same way.
+WS_BASIC[21] = ("multiple", 8, "address and mask pairs")
+WS_BASIC[33] = ("multiple", 8, "address and router pairs")
+WS_BASIC[85] = ("multiple", 4, "IPv4 addresses")
+WS_BASIC[93] = ("multiple", 2, "16 bit architecture types")
+for _c in (152, 154, 155, 159):
+    WS_BASIC[_c] = ("is", 4, "a 4 byte value")
+
+
+def ws_length(rule, n):
+    """The fault a basic type finds in a value of length n, or None."""
+    how, size, what = rule
+    if how == "is" and n != size:
+        return f"length other than {size} ({what})"
+    if how == "multiple" and n % size:
+        return f"length not a multiple of {size} ({what})"
+    return None
+
+
+# Option 63's sub-options with a basic type (o63_opt in packet-dhcp.c),
+# and option 82's (o82_opt): 1 to 4 of option 63 are flags that must
+# be empty.
+WS_O63 = {1: ("is", 0, "a flag"), 2: ("is", 0, "a flag"),
+          3: ("is", 0, "a flag"), 4: ("is", 0, "a flag"),
+          5: ("is", 1, "a boolean"), 6: ("multiple", 4, "IPv4 addresses"),
+          7: ("multiple", 4, "IPv4 addresses"), 8: ("is", 1, "a byte"),
+          9: ("is", 1, "a byte"), 10: ("is", 1, "a boolean"),
+          11: ("is", 4, "an IPv4 address")}
+WS_O82 = {4: ("is", 4, "a 32 bit number"), 5: ("is", 4, "an IPv4 address"),
+          10: ("is", 1, "a byte"), 11: ("is", 4, "an IPv4 address"),
+          13: ("is", 2, "an access technology type"),
+          19: ("is", 2, "a 16 bit number"),
+          150: ("is", 4, "an IPv4 address"),
+          152: ("is", 4, "an IPv4 address")}
+
+
+def ws_rule_61(v, m):
+    # Client identifier: only type 255 (RFC 4361) is read further.
+    n = len(v)
+    if not n or v[0] != 255:
+        return
+    ws_need(v, 7, "type 255 with no room for its IAID and DUID type")
+    duid = v[5] << 8 | v[6]
+    if duid == 1 and n < 8:
+        m.error("type 255 with a DUID-LLT shorter than its fields")
+    elif duid == 1:
+        ws_need(v, 13, "type 255 with a DUID-LLT that ends inside its fields")
+    elif duid == 2:
+        ws_need(v, 11, "type 255 with a DUID-EN that ends inside its fields")
+    elif duid == 3:
+        ws_need(v, 9, "type 255 with a DUID-LL that ends inside its fields")
+
+
+def ws_rule_63(v, m):
+    # NetWare/IP sub-options.
+    off = 0
+    while off < len(v):
+        if off + 1 >= len(v):
+            m.error("a sub-option with no length byte")
+            return
+        sub, ln = v[off], v[off + 1]
+        ws_need(v, off + 2 + ln, "a sub-option runs past the value")
+        fault = WS_O63.get(sub) and ws_length(WS_O63[sub], ln)
+        if fault:
+            m.error(f"sub-option {sub}: {fault}")
+        off += 2 + ln
+
+
+def ws_rule_77(v, m):
+    # User class (RFC 3004), or Microsoft's form when the first byte is 0.
+    n = len(v)
+    if n < 2:
+        return m.error("length below 2")
+    if v[0] == 0:
+        off = 2 + v[1]
+        ws_need(v, off, "a Microsoft user class whose data runs past the value")
+        off += (4 - v[1] % 4) & 3
+        ws_need(v, off, "a Microsoft user class whose padding runs past the value")
+        for _ in range(2):
+            ws_need(v, off + 2, "a Microsoft user class with no room for a length")
+            off += 2 + (v[off] << 8 | v[off + 1])
+            ws_need(v, off, "a Microsoft user class whose text runs past the value")
+        return
+    off = 0
+    while off < n and v[off] < n - off:  # longer ones are read as text
+        if v[off] == 0:
+            return m.error("a user class of length 0")
+        off += 1 + v[off]
+
+
+def ws_rule_78(v, m):
+    # SLP directory agent (RFC 2610): a mandatory byte, then addresses.
+    if not v:
+        return m.error("length 0")
+    off = 2 if v[0] == 0x80 and len(v) > 1 else 1
+    if v[0] == 0x80 and len(v) == 1:
+        return
+    if (len(v) - off) % 4:
+        m.error("addresses not a multiple of 4 bytes")
+
+
+def ws_rule_81(v, m):
+    # Client FQDN (RFC 4702): flags, two rcodes, then the name.
+    if len(v) < 3:
+        return m.error("length below 3")
+    if len(v) > 3 and v[0] & 0x04:
+        ws_dns_name(v, 3, len(v) - 3, 3)
+
+
+def ws_rule_82(v, m):
+    # Relay agent information (RFC 3046) sub-options.
+    off = 0
+    while off < len(v):
+        if off + 1 >= len(v):
+            return m.error("a sub-option with no length byte")
+        sub, ln = v[off], v[off + 1]
+        so, end = off + 2, off + 2 + ln
+        if end > len(v):
+            return m.error("a sub-option runs past the value")
+        fault = WS_O82.get(sub) and ws_length(WS_O82[sub], ln)
+        if fault:
+            m.error(f"sub-option {sub}: {fault}")
+        if sub == 16 and ln < 6:
+            # A MAC address field read from fewer than 6 bytes.
+            m.error("sub-option 16: a MAC address shorter than 6 bytes")
+            raise WsStop("sub-option 16: a MAC address shorter than 6 bytes")
+        while sub == 9 and so < end:
+            ws_need(v, so + 5, "a vendor block runs past the value")
+            if int.from_bytes(v[so:so + 4], "big") == 4491:
+                return m.unfollowed("a CableLabs vendor block")
+            ws_need(v, so + 5 + v[so + 4], "a vendor block runs past the value")
+            so += 5 + v[so + 4]
+        off = end
+
+
+def ws_rule_83(v, m):
+    # iSNS (RFC 4174): fixed fields, then addresses.
+    n = len(v)
+    if n < 14:
+        return m.error("length below 14")
+    off = 14
+    if v[5] & 0x03 == 0x03:
+        if n < 18:
+            return m.error("heartbeat set and length below 18")
+        off = 18
+    if (n - off) % 4:
+        m.error("secondary servers not a multiple of 4 bytes")
+
+
+def ws_rule_90(v, m):
+    # Authentication (RFC 3118).
+    if len(v) < 11:
+        return m.error("length below 11")
+    if v[0] == 1 and v[1] == 1 and m.dhcp_type != 1 and len(v) - 11 < 20:
+        m.error("delayed HMAC-MD5 authentication outside a DISCOVER with"
+                " fewer than 20 bytes of secret id and hash")
+
+
+def ws_rule_94(v, m):
+    # Client network interface identifier (RFC 4578).
+    ws_need(v, 1, "length 0")
+    if v[0] == 1:
+        ws_need(v, 3, "type 1 with no room for its version bytes")
+
+
+def ws_rule_99(v, m):
+    # Civic location (RFC 4776): what, country, then CAtype elements.
+    off = 3
+    while len(v) >= 3 and len(v) - off >= 2:
+        off += 2 + v[off + 1]
+        if off > len(v):
+            return m.error("a civic address element runs past the value")
+
+
+def ws_rule_117(v, m):
+    # Name service search (RFC 2937): 16 bit option codes.
+    if len(v) < 2:
+        return m.error("length below 2")
+    if len(v) % 2:
+        return m.error("odd length")
+    for i in range(0, len(v), 2):
+        if v[i] << 8 | v[i + 1] not in (0, 6, 41, 44, 65):
+            m.error("a name service other than 0, 6, 41, 44 and 65")
+
+
+def ws_rule_121(v, m):
+    # Classless static routes (RFC 3442), and Microsoft's option 249.
+    if len(v) < 5:
+        return m.error("length below 5")
+    off = 0
+    while off < len(v):
+        if v[off] > 32:
+            return m.error("a mask width above 32")
+        # Its check for a route that runs past the value never fires
+        # (tvb_reported_length_remaining is never below 0): it reads on.
+        off += 1 + (v[off] + 7) // 8 + 4
+        ws_need(v, off, "a route runs past the value")
+
+
+def ws_rule_122(v, m):
+    # CableLabs client configuration (RFC 3495): followed only as far as
+    # its sub-option lengths (WS_PARTIAL).
+    off = 0
+    while off < len(v):
+        if off + 1 >= len(v):
+            return m.error("a sub-option with no length byte")
+        if off + 2 + v[off + 1] > len(v):
+            return m.error("a sub-option runs past the value")
+        off += 2 + v[off + 1]
+
+
+def ws_rule_123(v, m):
+    # Coordinate based location (RFC 3825), or CableLabs DSS_IDs.
+    n = len(v)
+    if n == 16:
+        return
+    if n >= 69:
+        return m.error("length 69 or more, and not 16")
+    ws_need(v, 2, "a DSS_ID with no length byte")
+    s = v[1]
+    ws_need(v, 2 + s, "a DSS_ID runs past the value")
+    if n > s + 2:
+        ws_need(v, 4 + s, "a second DSS_ID with no length byte")
+        # Wireshark 4.2.2 reads the second DSS_ID at 4 plus its own
+        # length, not at 4 plus the first one's.
+        ws_need(v, 4 + 2 * v[3 + s], "a second DSS_ID runs past the value")
+
+
+def ws_rule_124(v, m):
+    # Vendor-identifying vendor class (RFC 3925).
+    n, off = len(v), 0
+    if n == 1:
+        return
+    while n - off >= 5:
+        dl = v[off + 4]
+        off += 5
+        end = off + dl
+        # Its check for a block that runs past the value never fires
+        # (tvb_reported_length_remaining is never below 0).
+        while off < end:
+            ws_need(v, off + dl, "a vendor class item runs past the value")
+            dl = v[off]
+            ws_need(v, off + 1 + dl, "a vendor class item runs past the value")
+            off += 1 + dl
+    if n - off:
+        m.error("bytes left over, too few for an enterprise block")
+
+
+def ws_rule_125(v, m):
+    # Vendor-identifying vendor-specific information (RFC 3925).
+    n, off = len(v), 0
+    while n - off >= 5:
+        ent, dl = int.from_bytes(v[off:off + 4], "big"), v[off + 4]
+        off += 5
+        end = off + dl
+        # Its check for a block that runs past the value never fires
+        # (tvb_reported_length_remaining is never below 0), so it reads
+        # the block's sub-options up to `end`, wherever that is.
+        if ent in (3561, 4491):
+            return m.unfollowed(f"enterprise {ent}, which Wireshark reads"
+                                f" with a dissector of its own")
+        while off < end:
+            ws_need(v, off + 1, "a sub-option runs past the value")
+            if off + 1 >= end:
+                m.error("a sub-option with no length byte")
+                off = end
+                continue
+            ws_need(v, off + 2, "a sub-option runs past the value")
+            if off + 2 + v[off + 1] > end:
+                m.error("a sub-option runs past its enterprise block")
+                off = end
+                continue
+            ws_need(v, off + 2 + v[off + 1], "a sub-option runs past the value")
+            off += 2 + v[off + 1]
+    if n - off > 0:
+        m.error("bytes left over, too few for an enterprise block")
+
+
+def ws_rule_146(v, m):
+    # RDNSS selection (RFC 6731).
+    if len(v) < 10:
+        return m.error("length below 10")
+    ws_dns_name(v, 9, len(v) - 9, 9)
+
+
+def ws_rule_158(v, m):
+    # PCP server (RFC 7291): lists of addresses.
+    if len(v) < 5:
+        return m.error("length below 5")
+    off = 0
+    while len(v) - off >= 5:
+        ln = v[off]
+        ws_need(v, off + ln, "a PCP server list runs past the value")
+        off, got = off + 1, 1
+        while (ln - 1) % 4 == 0 and got < ln and len(v) - off >= 4:
+            off, got = off + 4, got + 4
+
+
+def ws_rule_212(v, m):
+    # 6RD (RFC 5969).
+    if len(v) < 22:
+        return m.error("length below 22")
+    if (len(v) - 22) % 4:
+        m.error("border relays not a multiple of 4 bytes")
+
+
+WS_AVAYA = ("TLSSRVR=", "HTTPSRVR=", "HTTPDIR=", "STATIC=", "MCIPADD=",
+            "DOT1X=", "ICMPDU=", "ICMPRED=", "L2Q=", "L2QVLAN=",
+            "LOGLOCAL=", "PHY1STAT=", "PHY2STAT=", "PROCPSWD=",
+            "PROCSTAT=", "SNMPADD=", "SNMPSTRING=", "VLANTEST=")
+
+
+def ws_rule_242(v, m):
+    # Avaya IP telephones: text up to the first zero byte, name=value
+    # pairs split at commas.
+    if len(v) < 5:
+        return m.error("length below 5")
+
+    def number(s):
+        return s.lstrip("-").isdigit() and -2**31 <= int(s) < 2**31
+
+    def check(p):
+        known = [k for k in WS_AVAYA if p.startswith(k) and len(p) > len(k)]
+        if not known:
+            m.error("a parameter Wireshark does not know")
+        # Wireshark 4.2.2 flags L2QVLAN when its value is a number.
+        elif known[-1] == "L2QVLAN=" and number(p[8:]):
+            m.error("an L2QVLAN value")
+        elif known[-1] == "VLANTEST=" and not number(p[9:]):
+            m.error("a VLANTEST value that is not a number")
+
+    param = ""
+    for field in v.split(b"\0")[0].decode("latin-1").split(","):
+        if "=" in field:
+            if param:
+                check(param)
+            param = field
+        elif param:
+            param += "," + field
+        else:
+            return m.error("text before the first parameter")
+    if param:
+        check(param)
+
+
+WS_RULES = {
+    61: ws_rule_61, 63: ws_rule_63, 77: ws_rule_77, 78: ws_rule_78,
+    81: ws_rule_81, 82: ws_rule_82, 83: ws_rule_83, 90: ws_rule_90,
+    94: ws_rule_94, 99: ws_rule_99, 117: ws_rule_117, 121: ws_rule_121,
+    122: ws_rule_122, 123: ws_rule_123, 124: ws_rule_124,
+    125: ws_rule_125, 146: ws_rule_146, 158: ws_rule_158,
+    212: ws_rule_212, 242: ws_rule_242, 249: ws_rule_121,
+    79: lambda v, m: ws_need(v, 1, "length 0"),
+    151: lambda v, m: None if v else m.error("length 0"),
+}
+# The options whose checks the model follows only in part. A fault
+# Wireshark reports in one of them is still a failure unless the model
+# finds one there too; one the model finds that Wireshark does not
+# report is not.
+WS_PARTIAL = {122: "the CableLabs client configuration sub-options,"
+                   " followed only as far as their lengths"}
+
+
+class WsItem:
+    """One item of an option area: a run of pad bytes, the end option,
+    or an option with its code, length and value. Both accounts use it:
+    the model's, and Wireshark's as tshark shows it."""
+
+    def __init__(self, offset, code, kind="option", length=None,
+                 value=None, parent=None):
+        self.offset = offset
+        self.code = code
+        self.kind = kind
+        self.length = length
+        self.value = value
+        self.parent = parent  # the option whose tree holds this one
+        self.type = None      # dhcp.option.dhcp: the message type
+        self.unfollowed = None  # why the model does not follow its value
+
+    def top(self):
+        item = self
+        while item.parent is not None:
+            item = item.parent
+        return item
+
+
+class WsComposite:
+    """The values of options 119 or 120 Wireshark joins (RFC 3396)."""
+
+    def __init__(self, total):
+        self.total = total  # the items the first pass counted
+        self.index = 0
+        self.value = None
+        self.parts = 0
+
+
+class WsModel:
+    """What Wireshark 4.2.2's DHCP/BOOTP dissector does with one
+    message, as dissect_dhcp in packet-dhcp.c runs: a first pass over
+    the options for 52, 53, 119 and 120; the fixed fields; then the
+    options, each through its own dissector."""
+
+    def __init__(self, data):
+        self.data = data
+        n = len(data)
+        self.cookie = n >= 240 and data[236:240] == COOKIE
+        # Before it builds any tree, the dissector reads op, htype and
+        # hlen, and for a request the hlen bytes of chaddr.
+        self.dissected = n >= 3 and not (
+            data[0] == 1 and data[2] and 28 + data[2] > n)
+        self.fields = False      # the fixed fields are shown
+        self.dhcp_type = None    # the type byte the first pass found
+        self.overload = 0        # the overload byte the first pass found
+        self.items = []          # every item, in the order shown
+        self.top = []            # the items of the options field
+        self.end = None          # offset of the end option there
+        self.trailing = None     # the bytes shown after it
+        self.faults = []         # (item or None, reason, what): errors
+        # Where it stops with an exception: (item or None, reason,
+        # what, whether inside the dissector of the item's option).
+        self.stop = None
+        self.current = None      # the option whose dissector runs
+        self.reason = None       # the named difference for its faults
+        try:
+            self.run()
+        except WsStop as e:
+            self.stop = (self.items[-1] if self.items else None,
+                         e.reason or self.reason, e.what, e.reason is None)
+
+    def where(self, offset):
+        """The named difference for a fault at `offset`, when where it
+        is says it: the sname and file fields, read as options under
+        option 52, or the options read after a BOOTP vendor area."""
+        if offset is not None and offset < 236:
+            return "overload"
+        if not self.cookie:
+            return "no-cookie"
+        return None
+
+    def error(self, what):
+        item = self.current
+        self.faults.append((item, self.where(item.offset) or self.reason, what))
+
+    def unfollowed(self, what):
+        self.current.unfollowed = what
+
+    def run(self):
+        data, n = self.data, len(self.data)
+        if not n:
+            return
+        if not self.dissected:
+            raise WsStop("it ends before the bytes the dissector reads"
+                         " first: op, htype, hlen, and hlen bytes of"
+                         " chaddr in a request",
+                         "short" if n < 240 else "hlen")
+        if n < 240:
+            raise WsStop("the message ends inside the fixed fields and"
+                         " cookie", "short")
+        voff = 240 if self.cookie else 300
+        # The first pass: option 52, option 53, and counts of 119 and 120.
+        blocks = {119: 0, 120: 0}
+        off = voff
+        while off < n:
+            c = data[off]
+            if c == 0:
+                while off < n and data[off] == 0:
+                    off += 1
+                continue
+            if c == 255 or off + 1 >= n:
+                break
+            ln = data[off + 1]
+            if off + 2 + ln <= n:
+                if c in (52, 53) and off + 2 >= n:
+                    raise WsStop(
+                        f"option {c} of length 0 ends the message, and the"
+                        f" first pass reads its value byte past the end",
+                        self.where(None) or ("overload" if c == 52 else "53-empty"))
+                if c == 52:
+                    self.overload = data[off + 2]
+                elif c == 53:
+                    self.dhcp_type = data[off + 2]
+                elif c in blocks:
+                    blocks[c] += 1
+            off += 2 + ln
+        self.fields = True
+        if not self.cookie and n < 300:
+            raise WsStop("no cookie, and the message ends inside the 64"
+                         " byte BOOTP vendor area", "no-cookie")
+        self.composite = {c: WsComposite(t) for c, t in blocks.items()}
+        at_end, off = self.area(voff, n, None, [self.overload])
+        if at_end:
+            self.end = off - 1
+            if off < n:
+                self.trailing = data[off:]
+        elif self.dhcp_type is not None:
+            self.faults.append((None, self.where(None) or "no-end",
+                                "no end option"))
+
+    def area(self, start, end, parent, cell):
+        """The option loop of dissect_dhcp, or of an sname or file
+        field read as options: items from `start` to `end`. Returns
+        (at the end option, offset reached)."""
+        data, n = self.data, len(self.data)
+        off = start
+        while off < end:
+            c = data[off]
+            if c == 0:
+                i = off + 1
+                while i < end and data[i] == 0:
+                    i += 1
+                self.add(WsItem(off, 0, "pad", i - off, parent=parent))
+                off = i
+                continue
+            if c == 255:
+                self.add(WsItem(off, 255, "end", parent=parent))
+                return True, off + 1
+            if off + 1 >= n:
+                raise WsStop("an option code with no length byte",
+                             self.where(off) or "code-last")
+            ln = data[off + 1]
+            item = WsItem(off, c, "option", ln, parent=parent)
+            self.add(item)
+            if off + 2 + ln > n:
+                raise WsStop("an option runs past the end of the message",
+                             self.where(off) or "overrun")
+            item.value = bytes(data[off + 2:off + 2 + ln])
+            self.current, self.reason = item, self.where(off) or "option-value"
+            self.option(item, cell)
+            off += 2 + ln
+        return False, off
+
+    def add(self, item):
+        self.items.append(item)
+        if item.parent is None:
+            self.top.append(item)
+
+    def option(self, item, cell):
+        """What the dissector for the item's option code does."""
+        c, v = item.code, item.value
+        if c == 52:
+            if not v:
+                return self.error("length 0")
+            if 1 <= cell[0] <= 3:
+                for bit, name, lo, hi in ((2, "sname", 44, 108),
+                                          (1, "file", 108, 236)):
+                    if v[0] & bit:
+                        for comp in self.composite.values():
+                            comp.index = 0
+                        at_end, _ = self.area(lo, hi, item, [0])
+                        self.current, self.reason = item, "overload"
+                        if not at_end:
+                            self.error(f"no end option in {name} read as"
+                                       f" options")
+                cell[0] = 0
+        elif c == 53:
+            self.reason = self.where(item.offset) or "53-empty"
+            ws_need(v, 1, "option 53 of length 0")
+        elif c in (119, 120):
+            self.joined_option(item)
+        elif c in WS_BASIC:
+            fault = ws_length(WS_BASIC[c], len(v))
+            if fault:
+                self.error(fault)
+        elif c in WS_RULES:
+            WS_RULES[c](v, self)
+
+    def joined_option(self, item):
+        """Options 119 and 120: Wireshark joins their values (RFC 3396)
+        and reads the joined value at the last one the first pass
+        counted."""
+        comp, v = self.composite[item.code], item.value
+        comp.index += 1
+        if v:
+            comp.value = (comp.value or b"") + v
+            comp.parts += 1
+        if comp.index != comp.total or comp.value is None:
+            return
+        whole = comp.value
+        if comp.parts > 1:
+            self.reason = self.where(item.offset) or "joined"
+        if item.code == 119:
+            off = 0
+            while off < len(whole):
+                off += ws_dns_name(whole, off, len(whole), 0)
+            comp.value = None
+        elif whole[0] == 0 and len(whole) < 3:
+            self.error("a domain name list shorter than 3 bytes")
+        elif whole[0] == 0:
+            off = 1
+            while off < len(whole):
+                off += ws_dns_name(whole, off, len(whole), 1)
+            comp.value = None
+        elif whole[0] == 1 and len(whole) < 5:
+            self.error("addresses: length below 5")
+        elif whole[0] == 1 and (len(whole) - 1) % 4:
+            self.error("addresses not a multiple of 4 bytes")
+        elif whole[0] > 1:
+            self.error("an encoding byte other than 0 and 1")
+
+
+# ---------------------------------------------------------------- the
+# Wireshark side: tshark's JSON, read back.
+
+def ip_checksum(header):
+    total = sum(int.from_bytes(header[i:i + 2], "big")
+                for i in range(0, len(header), 2))
+    while total >> 16:
+        total = (total & 0xFFFF) + (total >> 16)
+    return (~total) & 0xFFFF
+
+
+def udp_frame(payload):
+    """An Ethernet/IPv4/UDP frame carrying `payload`: from the client
+    port 68 to the server port 67, or from 67 to 68 when the message's
+    op byte says it is a reply (2). The UDP checksum is 0, "none"."""
+    sport, dport = (67, 68) if payload[:1] == b"\x02" else (68, 67)
+    udp = struct.pack("!HHHH", sport, dport, 8 + len(payload), 0) + payload
+    ip = bytearray(struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(udp),
+                               0, 0, 64, 17, 0, bytes(4), b"\xff" * 4))
+    ip[10:12] = ip_checksum(ip).to_bytes(2, "big")
+    eth = b"\xff" * 6 + MAC[:6] + b"\x08\x00"
+    return eth + bytes(ip) + udp
+
+
+def write_pcap(path, payloads):
+    """A classic pcap file (link type 1, Ethernet), one frame for each
+    payload, a second apart."""
+    out = bytearray(struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0,
+                                65535, 1))
+    for i, payload in enumerate(payloads):
+        frame = udp_frame(payload)
+        out += struct.pack("<IIII", i, 0, len(frame), len(frame)) + frame
+    path.write_bytes(bytes(out))
+
+
+class WsObj(list):
+    """A JSON object from tshark, kept as its (key, value) pairs in
+    order: tshark writes a key once for each option, so a dict would
+    keep only the last one."""
+
+
+def tshark_version(tshark):
+    try:
+        out = subprocess.run([tshark, "--version"], capture_output=True,
+                             text=True, timeout=120).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    lines = out.strip().splitlines()
+    return lines[0].rstrip(".") if lines else None
+
+
+def run_tshark(tshark, payloads, workdir):
+    """Wireshark's dissection of each payload, as each frame's layers
+    (a WsObj), and a problem or None. tshark runs with an empty
+    personal configuration directory, so no saved preference of
+    whoever runs the tests changes the dissection."""
+    pcap = workdir / "messages.pcap"
+    write_pcap(pcap, payloads)
+    env = dict(os.environ)
+    env["WIRESHARK_CONFIG_DIR"] = str(workdir / "config")
+    try:
+        proc = subprocess.run(
+            [tshark, "-n", "-r", str(pcap), "-T", "json", "-x"],
+            capture_output=True, timeout=TIMEOUT, env=env)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, f"tshark did not run: {e}"
+    if proc.returncode != 0:
+        tail = " / ".join(proc.stderr.decode("utf-8", "replace")
+                          .strip().splitlines()[-2:])
+        return None, f"tshark exit status {proc.returncode}: {tail}"
+    try:
+        frames = json.loads(proc.stdout.decode("utf-8", "replace"),
+                            object_pairs_hook=WsObj)
+    except ValueError as e:
+        return None, f"tshark wrote no JSON: {e}"
+    if len(frames) != len(payloads):
+        return None, (f"tshark gave {len(frames)} frames for"
+                      f" {len(payloads)} messages")
+    layers = []
+    for frame in frames:
+        source = dict(frame).get("_source") if isinstance(frame, WsObj) else None
+        got = dict(source).get("layers") if isinstance(source, WsObj) else None
+        layers.append(got if isinstance(got, WsObj) else None)
+    return layers, None
+
+
+def ws_hex(raw):
+    """The bytes of a field's raw entry from `tshark -x`, a list of
+    the hex, the frame offset, the length and more, or None. When a
+    field runs past the frame, tshark writes a note, not hex."""
+    if not isinstance(raw, list) or not raw or not isinstance(raw[0], str):
+        return None
+    try:
+        return bytes.fromhex(raw[0])
+    except ValueError:
+        return None
+
+
+def ws_offset(raw):
+    """The message offset of a field's raw entry, or None."""
+    if isinstance(raw, list) and len(raw) > 1 and isinstance(raw[1], int):
+        return raw[1] - WS_PAYLOAD
+    return None
+
+
+class WsReading:
+    """What Wireshark read in one frame."""
+
+    def __init__(self):
+        self.dissected = False   # a dhcp layer is there
+        self.malformed = False   # Malformed Packet: an exception
+        self.errors = []         # expert errors: (option item, key, message)
+        self.notes = set()       # the key of every expert item, any severity
+        self.frame_problems = []  # anything wrong outside the message
+        self.fields = {}         # field: (shown value, raw bytes, offset, size)
+        self.items = []          # option items of the options field
+        self.all = []            # every option item, nested ones too
+        self.trailing = None     # the padding shown after the end option
+        self.bootp = False       # marked plain BOOTP, no message type
+
+
+def ws_expert(obj):
+    pairs = dict(obj)
+    names = [k for k, _ in obj if not k.startswith("_ws.expert")]
+    try:
+        severity = int(pairs.get("_ws.expert.severity", "0"))
+    except ValueError:
+        severity = 0
+    return (names[0] if names else "?",
+            str(pairs.get("_ws.expert.message", "")), severity)
+
+
+def ws_walk(obj, reading, owner):
+    """Read a dhcp tree, or a subtree of it, in order. `owner` is the
+    option item whose tree this is, or None at the top."""
+    raws = {}
+    item = None
+    for key, value in obj:
+        if key.endswith("_raw"):
+            raws[key[:-4]] = value
+            continue
+        raw = raws.get(key)
+        if key == "_ws.expert" and isinstance(value, WsObj):
+            name, message, severity = ws_expert(value)
+            reading.notes.add(name)
+            if severity >= WS_ERROR:
+                reading.errors.append((owner, name, message))
+        elif key == "dhcp.option.type":
+            hexed = ws_hex(raw)
+            try:
+                # The code byte; Wireshark shows 0 for the end option, so
+                # the raw bytes say it better when they are there.
+                code = hexed[0] if hexed else int(value)
+            except (TypeError, ValueError):
+                code = None
+            item = WsItem(ws_offset(raw), code, parent=owner)
+            (reading.items if owner is None else []).append(item)
+            reading.all.append(item)
+        elif key == "dhcp.option.type_tree" and isinstance(value, WsObj):
+            if item is None:
+                reading.frame_problems.append("an option tree with no option")
+                continue
+            parts = dict(value)
+            if "dhcp.option.padding" in parts:
+                item.kind = "pad"
+            elif "dhcp.option.end" in parts:
+                item.kind = "end"
+            try:
+                if "dhcp.option.length" in parts:
+                    item.length = int(parts["dhcp.option.length"])
+                item.value = ws_hex(parts.get("dhcp.option.value_raw"))
+                if item.value is None and item.length == 0:
+                    # No value field for an empty value: Wireshark
+                    # reads the length 0 and nothing after it.
+                    item.value = b""
+                if "dhcp.option.dhcp" in parts:
+                    item.type = int(parts["dhcp.option.dhcp"])
+            except (TypeError, ValueError):
+                reading.frame_problems.append("an option Wireshark shows"
+                                              " in a form the harness"
+                                              " cannot read")
+            ws_walk(value, reading, item)
+        elif owner is None and (key in WS_FIXED or key in WS_CHADDR):
+            if key not in reading.fields and ws_hex(raw) is not None:
+                reading.fields[key] = (value, ws_hex(raw), ws_offset(raw),
+                                       raw[2])
+        elif owner is None and key == "dhcp.option.padding":
+            reading.trailing = ws_hex(raw)
+        elif owner is None and key == "dhcp.bootp":
+            reading.bootp = True
+        elif isinstance(value, WsObj):
+            ws_walk(value, reading, owner)
+
+
+def ws_experts_in(obj):
+    found = []
+    for key, value in obj:
+        if key == "_ws.expert" and isinstance(value, WsObj):
+            found.append(ws_expert(value)[1])
+        elif isinstance(value, WsObj):
+            found += ws_experts_in(value)
+    return found
+
+
+def ws_reading(layers):
+    reading = WsReading()
+    if layers is None:
+        reading.frame_problems.append("no dissection of this frame")
+        return reading
+    names = [key for key, _ in layers if not key.endswith("_raw")]
+    if names[:4] != ["frame", "eth", "ip", "udp"]:
+        reading.frame_problems.append(f"layers {names}")
+    for key, value in layers:
+        if key.endswith("_raw"):
+            continue
+        if key == "dhcp":
+            reading.dissected = True
+            if isinstance(value, WsObj):
+                ws_walk(value, reading, None)
+        elif key == "_ws.malformed":
+            reading.malformed = True
+        elif key.startswith("_ws."):
+            reading.frame_problems.append(key)
+        elif isinstance(value, WsObj):
+            reading.frame_problems += [f"{key}: {m}"
+                                       for m in ws_experts_in(value)]
+    return reading
+
+
+# ---------------------------------------------------------------- the
+# comparison.
+
+def read_area(data):
+    """The options of a message's option area as the rules of SPEC.md
+    read them; the offset of the end byte, or None when there is
+    none; and the first rule of the option area it breaks, or None.
+    Like oracle_parse, but going on to say why."""
+    options = []
+    i = 240
+    while i < len(data):
+        b = data[i]
+        if b == 0:
+            i += 1
+            continue
+        if b == 255:
+            return options, i, ("after-end" if any(data[i + 1:]) else None)
+        if i + 1 >= len(data):
+            return options, None, "code-last"
+        ln = data[i + 1]
+        if i + 2 + ln > len(data):
+            return options, None, "overrun"
+        options.append((b, bytes(data[i + 2:i + 2 + ln])))
+        i += 2 + ln
+    return options, None, None
+
+
+def input_breaks(data):
+    """The rules of SPEC.md a message breaks, found from its bytes: the
+    fixed fields, and then, when the cookie is there, the option area
+    and option 53."""
+    if len(data) < 240:
+        return ["short"]
+    out = []
+    if data[0] not in (1, 2):
+        out.append("op")
+    if data[2] > 16:
+        out.append("hlen")
+    if data[236:240] != COOKIE:
+        return out + ["no-cookie"]
+    options, _, area = read_area(data)
+    if area:
+        out.append(area)
+    types = [v for c, v in options if c == 53]
+    if not types:
+        out.append("no-53")
+    if len(types) > 1:
+        out.append("53-repeated")
+    for v in types:
+        if not v:
+            out.append("53-empty")
+            continue
+        if len(v) > 1:
+            out.append("53-length")
+        if 9 <= v[0] <= 18:
+            out.append("53-registered")
+        elif not 1 <= v[0] <= 8:
+            out.append("53-unknown")
+    return list(dict.fromkeys(out))
+
+
+def tool_reading(answer):
+    """The fields and options of the tool's reprint. The reprint has
+    passed reprint_problem, so it is in canonical form."""
+    data = bytes(int(x) for x in answer[3:].split(","))
+
+    def word(a, b):
+        return int.from_bytes(data[a:b], "big")
+
+    got = {
+        "op": data[0], "htype": data[1], "hlen": data[2], "hops": data[3],
+        "xid": word(4, 8), "secs": word(8, 10), "flags": word(10, 12),
+        "ciaddr": word(12, 16), "yiaddr": word(16, 20),
+        "siaddr": word(20, 24), "giaddr": word(24, 28),
+        "chaddr": data[28:44], "sname": data[44:108],
+        "file": data[108:236], "cookie": data[236:240],
+    }
+    options = []
+    i = 240
+    while data[i] != 255:
+        options.append((data[i], data[i + 2:i + 2 + data[i + 1]]))
+        i += 2 + data[i + 1]
+    got["options"] = options
+    got["type"] = [v[0] for c, v in options if c == 53][0]
+    return got
+
+
+def ws_text(raw):
+    """The text Wireshark shows for an sname or file field: the bytes
+    before the first zero byte, as ASCII, with each byte above 127
+    shown as U+FFFD."""
+    return "".join(chr(b) if b < 0x80 else "�"
+                   for b in raw.split(b"\0")[0])
+
+
+def ws_shown(key, shown):
+    """A fixed field's value as Wireshark shows it, as an int or bytes."""
+    if key in ("dhcp.server", "dhcp.file"):
+        return shown
+    if key.startswith("dhcp.ip.") or key == "dhcp.cookie":
+        quad = bytes(int(p) for p in shown.split("."))
+        return quad if key == "dhcp.cookie" else int.from_bytes(quad, "big")
+    return int(shown, 0)
+
+
+class WsVerdict:
+    """The outcome for one message: how it agrees (or None), the named
+    differences found, as {name: {what}}, and the failures."""
+
+    def __init__(self):
+        self.agreed = None
+        self.named = {}
+        self.fails = []
+
+    def name(self, key, what=None):
+        self.named.setdefault(key, set())
+        if what:
+            self.named[key].add(what)
+
+
+def ws_faults(model, ws, out):
+    """Match each fault Wireshark reports with one the model finds in
+    the message, and the other way round. A matched fault puts the
+    message under the model's reason for it."""
+    if ws.frame_problems:
+        out.fails += [f"frame: {p}" for p in ws.frame_problems]
+    if model.dissected != ws.dissected:
+        out.fails.append(f"Wireshark {'dissects' if ws.dissected else 'does not dissect'}"
+                         f" it as BOOTP, the model says otherwise")
+        return
+    items = {it.offset: it for it in model.items}
+
+    def unknown(at):
+        item = items.get(at)
+        if item is not None and item.top().unfollowed:
+            return f" (the harness does not follow {item.top().unfollowed})"
+        return ""
+
+    # The exception: there or not, and where.
+    stop = model.stop
+    last = ws.all[-1] if ws.all else None
+    if ws.malformed and stop is None:
+        at = last.offset if last else None
+        out.fails.append(f"Wireshark: Malformed Packet after the item at"
+                         f" {at}, which the model does not find in the"
+                         f" message{unknown(at)}")
+    elif stop is not None and not ws.malformed:
+        if stop[0] is None or stop[0].top().code not in WS_PARTIAL:
+            out.fails.append(f"the model finds an exception ({stop[2]})"
+                             f" Wireshark does not raise")
+    elif stop is not None:
+        mine = (stop[0].offset, stop[0].code) if stop[0] else None
+        theirs = (last.offset, last.code) if last else None
+        if mine != theirs:
+            out.fails.append(f"Wireshark stops after the item {theirs},"
+                             f" the model after {mine}")
+        else:
+            out.name(stop[1], ws_why(stop[0] if stop[3] else None, stop[2]))
+    # The expert errors, item by item.
+    mine, theirs = {}, {}
+    for item, reason, what in model.faults:
+        mine.setdefault(item.offset if item else None, []).append(
+            (item, reason, what))
+    for owner, key, message in ws.errors:
+        theirs.setdefault(owner.offset if owner else None, []).append(
+            (key, message))
+    reached = {it.offset for it in ws.all} | {None}
+    for at in sorted(set(mine) | set(theirs), key=lambda x: -1 if x is None else x):
+        got, want = theirs.get(at, []), mine.get(at, [])
+        item = items.get(at)
+        partial = item is not None and item.top().code in WS_PARTIAL
+        if got and not want:
+            out.fails += [f"Wireshark: {m} ({k}) in the item at {at}, a"
+                          f" fault the model does not find in the"
+                          f" message{unknown(at)}" for k, m in got]
+        elif want and not got and at in reached and not partial:
+            out.fails += [f"the model finds {w} in the item at {at},"
+                          f" Wireshark reports no error there"
+                          for _, _, w in want]
+        elif got and len(got) != len(want) and not partial:
+            out.fails.append(f"in the item at {at}: Wireshark reports"
+                             f" {len(got)} errors, the model finds {len(want)}")
+        elif got:
+            for it, reason, what in want:
+                out.name(reason, ws_why(it, what))
+
+
+def ws_why(item, what):
+    """A fault as the record lists it: the option code, then what the
+    harness found."""
+    return f"{item.code}: {what}" if item is not None else what
+
+
+def ws_taken(data, tool, model, ws):
+    """Compare a message the tool takes with Wireshark's reading of it."""
+    out = WsVerdict()
+    ws_faults(model, ws, out)
+    if not ws.dissected or out.fails:
+        return out
+    for name in [r for r in out.named if r in WS_AGREE]:
+        out.fails.append(f"the model finds {name}, a rule SPEC.md turns"
+                         f" a message away for, in a message the tool takes")
+    if not model.fields:
+        # Wireshark stopped in its first pass, before any field.
+        if ws.fields or ws.all:
+            out.fails.append("Wireshark shows fields the model says it"
+                             " does not reach")
+        return out
+    ours = tool["options"]
+    ov = model.overload
+    # The fixed fields: the value Wireshark shows, and where it read it.
+    for key, (name, offset, size) in WS_FIXED.items():
+        want = tool[name]
+        if (key == "dhcp.server" and ov & 2) or (key == "dhcp.file" and ov & 1):
+            if key in ws.fields:
+                out.fails.append(f"{name}: Wireshark shows it, though"
+                                 f" option 52 says it carries options")
+            else:
+                out.name("overload", f"{name} not shown")
+            continue
+        if key not in ws.fields:
+            out.fails.append(f"{name}: Wireshark shows no {key}")
+            continue
+        shown, raw, at, n = ws.fields[key]
+        if (at, n) != (offset, size):
+            out.fails.append(f"{name}: Wireshark reads {n} bytes at {at},"
+                             f" SPEC.md has {size} at {offset}")
+        try:
+            value = ws_shown(key, shown)
+        except ValueError:
+            out.fails.append(f"{name}: Wireshark shows {shown!r}")
+            continue
+        if name in ("sname", "file"):
+            if raw != want or value != ws_text(want):
+                out.fails.append(f"{name}: Wireshark {shown[:40]!r},"
+                                 f" the tool {want.hex()[:40]}")
+        elif (name == "secs" and data[8] and not data[9]
+              and value == data[8] and "dhcp.secs_le" in ws.notes):
+            out.name("secs-le")
+        elif value != want:
+            out.fails.append(f"{name}: Wireshark {shown}, the tool {want!r}")
+    # chaddr: the address Wireshark shows, then its padding.
+    addr = ws.fields.get("dhcp.hw.mac_addr") or ws.fields.get("dhcp.hw.addr")
+    pad = ws.fields.get("dhcp.hw.addr_padding")
+    if addr is None and pad is None:
+        if tool["hlen"] == 0 and "dhcp.client_address_not_given" in ws.notes:
+            out.name("hlen-0")
+        else:
+            out.fails.append("chaddr: Wireshark shows none")
+    else:
+        try:
+            a = bytes.fromhex(addr[0].replace(":", "")) if addr else b""
+            p = bytes.fromhex(pad[0].replace(":", "")) if pad else b""
+        except ValueError:
+            a, p = None, None
+        chaddr = tool["chaddr"]
+        if (a is None or a != chaddr[:len(a)] or (p and p != chaddr[16 - len(p):])
+                or len(a) + len(p) < 16 or (addr and addr[2] != 28)):
+            out.fails.append(f"chaddr: Wireshark {addr and addr[0]} padding"
+                             f" {pad and pad[0]}, the tool {chaddr.hex()}")
+    # The options: code, length and value, in order. Where Wireshark
+    # stops with an exception, it shows those before it, as the model
+    # says.
+    theirs = [it for it in ws.items if it.kind == "option"]
+    want = len([it for it in model.top if it.kind == "option"])
+    if len(theirs) != (want if ws.malformed else len(ours)) or len(theirs) > len(ours):
+        out.fails.append(f"Wireshark reads {len(theirs)} options, the tool"
+                         f" {len(ours)}")
+    for k, (it, (code, value)) in enumerate(zip(theirs, ours)):
+        if it.code != code or it.length != len(value) or it.value != value:
+            out.fails.append(f"option {k}: Wireshark code {it.code} length"
+                             f" {it.length} value {it.value and it.value.hex()},"
+                             f" the tool code {code} value {value.hex()}")
+    if not ws.malformed:
+        ends = [it for it in ws.items if it.kind == "end"]
+        if len(ends) != (0 if model.end is None else 1):
+            out.fails.append(f"Wireshark reads {len(ends)} end options")
+        if ws.trailing != model.trailing:
+            out.fails.append("Wireshark shows other bytes after the end")
+    # The message type.
+    types = [it.type for it in theirs if it.code == 53]
+    if types and types[0] != tool["type"]:
+        out.fails.append(f"type: Wireshark {types[0]}, the tool {tool['type']}")
+    elif not types and not ws.malformed:
+        out.fails.append("type: Wireshark shows none")
+    return out
+
+
+def ws_refused(data, model, ws):
+    """Compare a message the tool turns away with Wireshark's reading
+    of it."""
+    out = WsVerdict()
+    breaks = input_breaks(data)
+    if not breaks:
+        out.fails.append("the harness finds no rule this message breaks")
+        return out
+    if not data:
+        if ws.dissected:
+            out.fails.append("Wireshark dissects an empty payload")
+        out.agreed = "empty"
+        return out
+    ws_faults(model, ws, out)
+    if out.fails:
+        return out
+    # Agreement: Wireshark stops at a rule the tool turns it away for.
+    stop = model.stop[1] if model.stop else None
+    if stop in WS_AGREE:
+        if stop not in breaks:
+            out.fails.append(f"the model finds {stop}, which the harness's"
+                             f" reading of SPEC.md does not")
+            return out
+        out.agreed = stop
+        del out.named[stop]
+        return out
+    # Otherwise each rule broken is a named difference, shown in
+    # Wireshark's own reading where its dissection reaches it.
+    out.fails += ws_confirm(data, breaks, model, ws, out)
+    if not out.named and not out.fails:
+        out.fails.append("Wireshark reports no fault, and the harness"
+                         " confirms no rule it breaks in Wireshark's reading")
+    return out
+
+
+def ws_confirm(data, breaks, model, ws, out):
+    """For a message the tool turns away and Wireshark does not stop at
+    any rule it breaks: for each rule Wireshark's dissection reaches,
+    check that its reading shows what the harness found, and name it.
+    Returns failures."""
+    fails = []
+    stopped = model.stop is not None
+
+    def shown(key):
+        try:
+            return ws_shown(key, ws.fields[key][0])
+        except (KeyError, ValueError):
+            return None
+
+    for b in breaks:
+        if b in WS_AGREE:
+            # Wireshark stops before it gets there, or it would agree.
+            if not stopped:
+                fails.append(f"Wireshark reports no fault at {b}")
+            continue
+        if not model.fields:
+            continue  # Wireshark stops before it shows any field
+        if b == "op":
+            if shown("dhcp.type") != data[0]:
+                fails.append(f"op: Wireshark {shown('dhcp.type')}, the"
+                             f" message {data[0]}")
+                continue
+        elif b == "hlen":
+            if shown("dhcp.hw.len") != data[2] or any(
+                    k in ws.fields for k in WS_CHADDR):
+                fails.append("hlen: Wireshark shows another hlen, or a"
+                             " hardware address")
+                continue
+        elif b == "no-cookie":
+            if "dhcp.cookie" in ws.fields:
+                fails.append("Wireshark shows a cookie the harness does"
+                             " not find")
+                continue
+        elif b == "no-53":
+            if not ws.bootp:
+                fails.append("Wireshark does not mark a message with no"
+                             " option 53 as plain BOOTP")
+                continue
+        elif stopped:
+            continue  # Wireshark stops before the end of the options
+        elif b == "after-end":
+            end = read_area(data)[1]
+            if model.end != end or ws.trailing != data[end + 1:]:
+                fails.append("Wireshark shows other bytes after the end"
+                             " option")
+                continue
+        elif b.startswith("53-"):
+            options = read_area(data)[0]
+            ours = [(len(v), v[0]) for c, v in options if c == 53 and v]
+            theirs = [(it.length, it.type) for it in ws.items
+                      if it.kind == "option" and it.code == 53]
+            if theirs != ours:
+                fails.append(f"option 53: Wireshark reads {theirs}, the"
+                             f" message holds {ours}")
+                continue
+        else:
+            fails.append(f"the harness has no way to confirm {b}")
+            continue
+        out.name(b)
+    return fails
+
+
+class WsResult:
+    def __init__(self):
+        self.version = None
+        self.reason = None     # why the cross check did not run
+        self.rows = []         # (part, messages, agreed, named, failed)
+        self.failures = []
+        self.named = {}        # named difference: messages
+        self.whys = {}         # (named difference, what): messages
+        self.taken = {"agreed": 0, "named": 0, "failed": 0}
+        self.refused = {}      # the rule Wireshark agrees at: messages
+        self.refused_named = 0
+        self.refused_failed = 0
+        self.exact = 0         # faults matched both ways
+
+    @property
+    def messages(self):
+        return sum(r[1] for r in self.rows)
+
+
+def run_wireshark(parts, require):
+    """Part 5: dissect every message the other parts fed the tool with
+    Wireshark's DHCP/BOOTP dissector, and compare."""
+    result = WsResult()
+    tshark = shutil.which("tshark")
+    if tshark is None:
+        result.reason = "tshark is not on PATH"
+        if require:
+            result.failures.append("wireshark: tshark is not on PATH")
+        return result
+    result.version = tshark_version(tshark) or "tshark, version unknown"
+    entries = [(name, label, data, answer) for name, t in parts
+               for label, data, answer in getattr(t, "messages", [])]
+    readings = []
+    with tempfile.TemporaryDirectory() as tmp:
+        workdir = Path(tmp)
+        (workdir / "config").mkdir()
+        for i in range(0, len(entries), WS_BATCH):
+            batch = entries[i:i + WS_BATCH]
+            layers, problem = run_tshark(
+                tshark, [data for _, _, data, _ in batch], workdir)
+            if problem:
+                result.failures.append(f"wireshark: {problem}")
+                layers = [None] * len(batch)
+            readings += layers
+    rows = {}
+    for (name, label, data, answer), layers in zip(entries, readings):
+        row = rows.setdefault(name, [0, 0, 0, 0])
+        row[0] += 1
+        ws = ws_reading(layers)
+        model = WsModel(data)
+        if answer == "none":
+            out = ws_refused(data, model, ws)
+        elif isinstance(answer, str) and reprint_problem(answer) is None \
+                and answer.startswith("ok:"):
+            out = ws_taken(data, tool_reading(answer), model, ws)
+        else:
+            out = WsVerdict()
+            out.fails.append("the tool gave no answer to compare")
+        if out.fails:
+            row[3] += 1
+            result.failures += [f"wireshark {label}: {f}" for f in out.fails]
+        elif out.agreed or not out.named:
+            row[1] += 1
+        else:
+            row[2] += 1
+            for key, whys in out.named.items():
+                result.named[key] = result.named.get(key, 0) + 1
+                for why in whys:
+                    result.whys[(key, why)] = result.whys.get((key, why), 0) + 1
+        if answer == "none":
+            if out.fails:
+                result.refused_failed += 1
+            elif out.agreed:
+                result.refused[out.agreed] = result.refused.get(out.agreed, 0) + 1
+            else:
+                result.refused_named += 1
+        else:
+            result.taken["failed" if out.fails else
+                         "named" if out.named else "agreed"] += 1
+    result.rows = [(name, *rows[name]) for name, _ in parts if name in rows]
+    return result
+
+
+def wireshark_record(ws):
+    """The Wireshark section of the results file."""
+    lines = ["## Wireshark", ""]
+    if not ws.version:
+        return lines + [
+            f"Not run: {ws.reason}. Install Wireshark's tshark to run"
+            " this part; `--require-wireshark` makes its absence a"
+            " failure.", ""]
+    rows = ws.rows
+    total = [sum(r[i] for r in rows) for i in range(1, 5)]
+    lines += [
+        f"{ws.version}. Each message the parts above fed the tool (the"
+        " request lines with no codes and the malformed request lines"
+        " are not messages) is written by the harness as the UDP"
+        " payload of an Ethernet/IPv4/UDP frame, from port 68 to port"
+        " 67, or from 67 to 68 when its op byte is 2, into a pcap"
+        " file, and dissected in batches of"
+        f" {WS_BATCH} by `tshark -n -r <file> -T json -x` with an empty"
+        " personal configuration. For each message the tool takes,"
+        " the harness compares op, htype, hlen, hops, xid, secs,"
+        " flags, ciaddr, yiaddr, siaddr, giaddr, chaddr, sname, file"
+        " and the cookie (each as Wireshark shows it, and read at the"
+        " offset SPEC.md gives), every option's code, length and"
+        " value bytes in order, the end option and what follows it,"
+        " and the message type. For every message it checks whether"
+        " Wireshark marks the frame Malformed Packet, where it stops,"
+        " and each expert error it reports.",
+        "",
+        "Each such fault is matched with one the harness finds in the"
+        " message's bytes by following the checks of Wireshark 4.2.2's"
+        " DHCP/BOOTP dissector (`WsModel` in tests/run_tests.py, written"
+        " from epan/dissectors/packet-dhcp.c and get_dns_name in"
+        " packet-dns.c at tag v4.2.2): the same exception at the same"
+        " option, the same number of errors in the same option. A fault"
+        " Wireshark reports that the harness does not find is a"
+        " failure, and so is one the harness finds that Wireshark does"
+        " not report, except in the options whose checks it does not"
+        " follow in full ("
+        + ", ".join(f"{c}, {w}" for c, w in sorted(WS_PARTIAL.items()))
+        + ").",
+        "",
+        "| part | messages | agreed | named differences | failures |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    lines += [f"| {name} | {n} | {a} | {d} | {f} |" for name, n, a, d, f in rows]
+    lines += [
+        f"| total | {total[0]} | {total[1]} | {total[2]} | {total[3]} |",
+        "",
+        "A message the tool takes agrees when Wireshark shows every"
+        " compared field as the tool reads it and reports no fault. A"
+        " message the tool turns away agrees when Wireshark stops with"
+        " an exception at a rule the tool turns it away for: "
+        + "; ".join(f"{k}, {v}" for k, v in WS_AGREE.items())
+        + "; or when there is no payload at all. Any other difference"
+        " is a failure unless the harness finds its reason in the"
+        " message itself, under one of the named differences below;"
+        " for a message the tool turns away, each rule it breaks that"
+        " Wireshark's dissection reaches must show in Wireshark's own"
+        " reading. The list is computed by this run, with the number"
+        " of messages under each; a message can fall under more than"
+        " one.",
+        "",
+        f"The tool takes {sum(ws.taken.values())} of the messages:"
+        f" Wireshark agrees on {ws.taken['agreed']}, differs only under"
+        f" named differences on {ws.taken['named']}, and fails on"
+        f" {ws.taken['failed']}. The tool turns away"
+        f" {sum(ws.refused.values()) + ws.refused_named + ws.refused_failed}:"
+        " Wireshark agrees on "
+        + ", ".join(f"{ws.refused[k]} ({'no payload to dissect' if k == 'empty' else k})"
+                    for k in list(WS_AGREE) + ["empty"] if ws.refused.get(k))
+        + f", differs only under named differences on"
+        f" {ws.refused_named}, and fails on {ws.refused_failed}.",
+        "",
+        "### Named differences",
+        "",
+    ]
+    named = [(key, ws.named[key]) for key in WS_NAMED if ws.named.get(key)]
+    if not named:
+        lines += ["No message falls under a named difference.", ""]
+    else:
+        lines += ["| difference | messages | reason found in the message |",
+                  "| --- | --- | --- |"]
+        lines += [f"| {key} | {n} | {WS_NAMED[key]} |" for key, n in named]
+        lines.append("")
+    for key in ("option-value", "joined", "overload", "no-cookie"):
+        whys = sorted(((w, n) for (k, w), n in ws.whys.items() if k == key),
+                      key=lambda x: ws_order(x[0]))
+        if whys:
+            lines += [
+                f"What the harness found under {key}, as option code:"
+                " check, with the number of messages: "
+                + "; ".join(f"{w} ({n})" for w, n in whys) + ".",
+                "",
+            ]
+    return lines
+
+
+def ws_order(why):
+    head = why.split(":")[0]
+    return (int(head) if head.isdigit() else 999, why)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=SEED_DEFAULT)
@@ -945,6 +2678,8 @@ def main():
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--rebuild-scapy", action="store_true",
                         help="rebuild tests/scapy-packets.txt with Scapy, then stop")
+    parser.add_argument("--require-wireshark", action="store_true",
+                        help="count it as a failure when tshark is not on PATH")
     args = parser.parse_args()
     if args.rebuild_scapy:
         return rebuild_scapy_fixture()
@@ -992,7 +2727,8 @@ def main():
          f" tests/{SCAPY_FIXTURE.name}", scapy),
         ("malformed request lines, answered error", malf),
     ]
-    failures = [f for _, t in parts for f in t.failures]
+    ws = run_wireshark(parts, args.require_wireshark)
+    failures = [f for _, t in parts for f in t.failures] + ws.failures
     total_in = sum(t.inputs for _, t in parts)
     total_agree = sum(t.agreements for _, t in parts)
 
@@ -1009,17 +2745,33 @@ def main():
         "- Oracle: the harness oracle, `oracle_parse` in"
         " tests/run_tests.py run under Python"
         f" {platform.python_version()}, a second reading of SPEC.md"
-        " that settles every verdict; Scapy"
-        f" {scapy.version} built some inputs and RFC 2131 and RFC 2132"
-        " others by hand, but no outside decoder judges any input",
+        " that settles every verdict; and "
+        + (f"Wireshark's DHCP/BOOTP dissector, {ws.version}, an outside"
+           " decoder run on every message (see Wireshark below)"
+           if ws.version else
+           f"no outside decoder: Wireshark did not run ({ws.reason})")
+        + f". Scapy {scapy.version} built some inputs, and RFC 2131"
+        " and RFC 2132 others by hand",
         f"- Seed: {args.seed}",
         f"- Inputs: {total_in}",
         f"- Failures: {len(failures)}",
         f"- Command: python3 tests/run_tests.py --seed {args.seed}"
         f" --count {args.count} --raw-count {args.raw_count}"
         f" --area-count {args.area_count}",
-        "- ISC DHCP and dnsmasq captures: not present in this"
-        " environment, no capture corpus run",
+        (f"- Wireshark: {ws.version}; {ws.messages} messages,"
+         f" {sum(r[2] for r in ws.rows)} agreed,"
+         f" {sum(r[3] for r in ws.rows)} with named differences,"
+         f" {sum(r[4] for r in ws.rows)} failed"
+         if ws.version else f"- Wireshark: not run, {ws.reason}"),
+        "- ISC DHCP and dnsmasq captures: not used. Neither ISC DHCP"
+        " nor dnsmasq is installed in this environment, and no capture"
+        " from either is available, so no capture corpus ran. Of the"
+        " oracles the plan in dhcpv4#1 names (ISC DHCP and dnsmasq"
+        " captures, Scapy, and Wireshark's dissectors), "
+        + ("these captures are the only ones this run does not use"
+           if ws.version else
+           "this run uses only Scapy's packets: Wireshark did not run"
+           " either"),
         f"- Lean: {lean_ver}",
         "",
         "## Counts",
@@ -1033,14 +2785,15 @@ def main():
         "",
         "An input agrees when the tool's answer is the oracle's"
         " answer, byte for byte, and, when it is `ok:`, the reprint"
-        " is a well formed message, as `Spec.parse_wf` says. The"
-        " harness keeps no list of excused differences: every"
-        " disagreement counts as a failure.",
+        " is a well formed message, as `Spec.parse_wf` says. Between"
+        " the tool and the harness oracle there is no list of excused"
+        " differences: every disagreement counts as a failure.",
         "",
         f"Of the {areas.inputs} random option areas, the oracle takes"
         f" {areas.taken} and turns away {areas.inputs - areas.taken}.",
         "",
     ]
+    lines += wireshark_record(ws)
     if failures:
         lines.append("## Failures")
         lines += [f"- {f}" for f in failures[:40]]
