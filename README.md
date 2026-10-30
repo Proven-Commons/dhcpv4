@@ -49,8 +49,9 @@ message the parser turns away, such as the single code
 fixed cases, the README example above, the cases for the
 readings that depart from the RFCs, the differential run
 against the harness oracle, the Scapy cross check, the
-mutation and malformed cases, and the Wireshark cross
-check, and writes the outcome to `tests/TEST-RESULTS.md`.
+mutation and malformed cases, the Wireshark probes, and
+the Wireshark cross check, and writes the outcome to
+`tests/TEST-RESULTS.md`.
 The Scapy cross check feeds the
 packets stored in `tests/scapy-packets.txt`, which Scapy
 built, so it runs the same with or without Scapy
@@ -65,9 +66,13 @@ dissector as an outside decoder on every message the other
 parts feed the tool, the ones it takes and the ones it turns
 away: the fixed cases, the README example, the readings
 cases, the random messages, raw byte strings and option
-areas, the mutations, and the Scapy packets. The harness
-writes each message as the UDP payload of an
-Ethernet/IPv4/UDP frame into a pcap file of its own, has
+areas, the mutations, the Scapy packets, and the probes: 92
+messages, each a DISCOVER with option 53 and one or two
+options built by hand at the edges of Wireshark's checks
+(`WS_PROBES` in `tests/run_tests.py`), such as option 242
+text whose bytes above 0x7F Wireshark counts as 3 bytes
+each. The harness writes each message as the UDP payload of
+an Ethernet/IPv4/UDP frame into a pcap file of its own, has
 `tshark` dissect the file in batches (`-T json`), and
 compares what Wireshark read with what the tool read: op,
 htype, hlen, hops, xid, secs, flags, ciaddr, yiaddr, siaddr,
@@ -104,12 +109,12 @@ an exception at the rule the tool turns it away for. Any
 other difference is a failure.
 
 The committed record was made with TShark 4.2.2 on the
-4,090 messages of the run with seed 20261026 (the other 14
+4,182 messages of the run with seed 20261026 (the other 14
 inputs are request lines with no message), with 0
 failures:
 
-- The tool takes 1,918 messages. Wireshark agrees on 635
-  and differs only under named differences on 1,283.
+- The tool takes 2,010 messages. Wireshark agrees on 673
+  and differs only under named differences on 1,337.
 - The tool turns away 2,172. Wireshark agrees on 1,421: it
   stops with an exception where the message is too short
   (1,071), an option runs past the end (127), a code byte
@@ -121,7 +126,7 @@ failures:
 |------------------|----------|-----------------------------------|
 | no-end | 527 | no end byte: Wireshark reports End option missing; `SPEC.md` takes the message |
 | overload | 105 | option 52: Wireshark hides sname or file, or reads them as options |
-| option-value | 1,056 | an option other than 53 whose value fails the check Wireshark applies to that option; `SPEC.md` does not read it |
+| option-value | 1,110 | an option other than 53 whose value fails the check Wireshark applies to that option; `SPEC.md` does not read it |
 | hlen-0 | 128 | hlen 0: Wireshark shows no hardware address |
 | secs-le | 5 | secs that look little endian: Wireshark shows them swapped, and the tool's secs, swapped, must be what it shows |
 | op | 392 | op not 1 or 2: Wireshark reports no error |

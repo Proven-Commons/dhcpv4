@@ -46,11 +46,15 @@ Five parts.
 4. Malformed request lines must be answered `error`.
 
 5. A Wireshark cross check: every message the parts above
-   feed the tool, taken and turned away alike, is written by
-   this script as the UDP payload of an Ethernet/IPv4/UDP
-   frame (port 68 to 67, or 67 to 68 for op 2) into a pcap
-   file, and dissected in batches by Wireshark's DHCP/BOOTP
-   dissector with `tshark -n -r FILE -T json -x`. For a
+   feed the tool, and the probes (WS_PROBES: options built by
+   hand at the edges of WsModel, below, each in a DISCOVER
+   after option 53, fed to the tool and checked against the
+   oracle like the rest), taken and turned away alike, is
+   written by this script as the UDP payload of an
+   Ethernet/IPv4/UDP frame (port 68 to 67, or 67 to 68 for
+   op 2) into a pcap file, and dissected in batches by
+   Wireshark's DHCP/BOOTP dissector with
+   `tshark -n -r FILE -T json -x`. For a
    message the tool takes, Wireshark must show op, htype,
    hlen, hops, xid, secs, flags, ciaddr, yiaddr, siaddr,
    giaddr, chaddr, sname, file and the cookie as the tool's
@@ -1705,7 +1709,8 @@ def ws_rule_242(v, m):
     if len(v) < 5:
         return m.error("length below 5")
     # It reads the value as ASCII text (ENC_ASCII): a byte above 0x7F
-    # becomes U+FFFD, and the text ends at the first zero byte.
+    # becomes U+FFFD (3 bytes in UTF-8), and the text ends at the first
+    # zero byte.
     text = "".join(chr(b) if b < 0x80 else "�"
                    for b in v.split(b"\0")[0])
     # wmem_strsplit gives no fields at all for empty text, so a value
@@ -1720,7 +1725,11 @@ def ws_rule_242(v, m):
         hit = re.fullmatch(r"[ \t\n\v\f\r]*([+-]?[0-9]+)", s)
         return bool(hit) and -2**31 <= int(hit.group(1)) < 2**31
 
-    def check(p):
+    def check(p, at):
+        # dissect_vendor_avaya_param gets the parameter's text and the
+        # offset `at` it counts for it. Both are in bytes of the text in
+        # UTF-8, where each U+FFFD takes 3 bytes, not the 1 byte of the
+        # value it stands for.
         known = [k for k in WS_AVAYA if p.startswith(k) and len(p) > len(k)]
         if not known:
             m.error("a parameter Wireshark does not know")
@@ -1729,19 +1738,28 @@ def ws_rule_242(v, m):
             m.error("an L2QVLAN value")
         elif known[-1] == "VLANTEST=" and not number(p[9:]):
             m.error("a VLANTEST value that is not a 32 bit number")
+        # The other parameters it knows hold text, which it adds with
+        # proto_tree_add_string at (at, UTF-8 length): test_length
+        # throws when that runs past the value. L2QVLAN and VLANTEST go
+        # in with proto_tree_add_int, which does not check.
+        elif known[-1] not in ("L2QVLAN=", "VLANTEST=") and (
+                at + len(p.encode()) > len(v)):
+            raise WsStop("a text parameter that, counted in UTF-8 bytes,"
+                         " runs past the value")
 
-    param = ""
+    param, at = "", 0
     for field in text.split(","):
         if "=" in field:
             if param:
-                check(param)
+                check(param, at)
+                at += len(param.encode()) + 1
             param = field
         elif param:
             param += "," + field
         else:
             return m.error("text before the first parameter")
     if param:
-        check(param)
+        check(param, at)
 
 
 # The readers inside the dissector that the model does not follow (the
@@ -1768,6 +1786,85 @@ WS_RULES = {
     79: lambda v, m: ws_need(v, 1, "length 0"),
     151: lambda v, m: None if v else m.error("length 0"),
 }
+
+
+# Options built by hand to reach the edges of the rules above. Each was
+# found where the model and Wireshark 4.2.2 once parted (in an
+# adversarial check, a seed sweep or a fuzz run), or sits on one side
+# of a boundary a rule follows. Each probe goes into a DISCOVER after
+# option 53, then the end option, so the tool takes it, and part 5
+# checks that the model finds the faults Wireshark reports there, no
+# more and no fewer, as it does for every message.
+WS_PROBES = [[(242, v)] for v in (
+    # 242: length below 5; empty text (a zero byte first); text before
+    # the first parameter, and after the last; parameters Wireshark
+    # does not know; L2QVLAN and VLANTEST numbers as ws_strtoi32 reads
+    # them.
+    b"ABCD", b"\0ABCD", b"\0HTTPSRVR=1", b"abc,TLSSRVR=1",
+    b"TLSSRVR=1,abc", b"FOO=1", b"TLSSRVR=", b"L2QVLAN=5", b"L2QVLAN=x",
+    b"VLANTEST=5", b"VLANTEST=--5", b"VLANTEST=+5", b"VLANTEST= 5",
+    b"VLANTEST=2147483647", b"VLANTEST=2147483648",
+    b"VLANTEST=-2147483648", b"VLANTEST=-2147483649", b"VLANTEST=5x",
+    # 242: a byte above 0x7F is U+FFFD, 3 bytes in UTF-8. A text
+    # parameter counted that way must fit in the value, from the offset
+    # Wireshark counts the same way (13 bytes do not hold
+    # SNMPSTRING=\xe9, 14 do); L2QVLAN and VLANTEST are not checked.
+    b"HTTPSRVR=\xff", b"TLSSRVR=\x80\x80\x80", b"STATIC=\x80\x80",
+    b"TLSSRVR=a\x80,HTTPDIR=b", b"SNMPSTRING=\xe9\0", b"SNMPSTRING=\xe9\0\0",
+    b"A=\x80\x80\x80,TLSSRVR=5", b"A=\x80\x80\x80,L2QVLAN=5",
+    b"A=\x80\x80\x80,VLANTEST=x", b"VLANTEST=\xff", b"L2QVLAN=\xff\xff",
+    b"TLSSRVR=1,\xff\0\0", b"TLSSRVR=1,\xff\0", b"STATIC=1,HTTPDIR=\xff\xff",
+    b"TLSSRVR=1,HTTPDIR=\xff\0", b"TLSSRVR=1,HTTPDIR=\xff\0\0",
+    b"Q=\xff\xff,MCIPADD=1.2.3.4\0\0\0\0", b"Q=\xff\xff,MCIPADD=1.2.3.4\0\0\0",
+    b"Q=\xff\xff,MCIPADD=1.2.3.4",
+    b"\xffAB=1", b"TLSSRVR=1\0\xff\xff", b"DOT1X=\xff\xff\0\0\0\0\0",
+    b"DOT1X=\xff\xff\0\0\0",
+)] + [[(122, bytes.fromhex(h))] for h in (
+    # 122: each sub-option's own check; domain names in 3 (type 0) and
+    # 6; the 12 byte read of 5 at length 12; 7 and 8 moving on one
+    # byte; 3 moving on by its length less 1; an unknown code.
+    "0a73", "0673", "01", "0104c0a80001", "0104c0a8", "0201",
+    "030600036162630000", "030501c0a80001", "030501c0a8", "0300",
+    "040c" + "00" * 12, "040c" + "00" * 8, "050c" + "00" * 12,
+    "050c" + "00" * 8, "05040000", "0600", "06050361626300", "0700",
+    "070005", "0800", "0902", "09020001", "0901", "070008010a00",
+)] + [[(43, bytes.fromhex(h))] for h in (
+    # 43 with no option 60: Alcatel-Lucent's reader takes it when its
+    # first byte is 58 or 64 to 67 and every sub-option fits.
+    "3a020001", "3a0100", "400400000001", "4003000000", "420101",
+    "4203010203", "4303616263", "3a0200010700", "3a020001ff07",
+    "3a050001", "39020001", "3a00", "003a020001", "003a0100",
+    "41040a000001", "43003a0100",
+)] + [
+    # 43 with a vendor class Wireshark has no reader of its own for,
+    # before it or after it.
+    [(60, b"MSFT 5.0"), (43, b"\x3a\x01\x00")],
+    [(43, b"\x3a\x01\x00"), (60, b"MSFT 5.0")],
+    [(60, b"PXEClien"), (43, b"\x3a\x01\x00")],
+    [(43, b"\x3a\x01\x00"), (60, b"PXEClien")],
+] + [[(82, bytes.fromhex(h))] for h in (
+    # 82: sub-option 13 (o82_opt gives it the type bytes) and 16.
+    "0d00", "0d0105", "0d020005", "0d03000005", "01036162630d00",
+    "1005" + "01" * 5, "1006" + "01" * 6,
+)]
+
+
+def probe_cases():
+    f = fixed_bytes(1, 1, 6, 0, 0x12345678, 0, 0x8000,
+                    0, 0, 0, 0, MAC, ZEROS64, ZEROS128)
+    return [(" ".join(f"{c}={v.hex()}" for c, v in opts),
+             f + COOKIE + option_area([(53, bytes([1]))] + opts))
+            for opts in WS_PROBES]
+
+
+def run_probes():
+    tally = Tally()
+    cases = probe_cases()
+    answers, problems = ask_all([request(d) for _, d in cases])
+    tally.failures += problems
+    for (label, data), answer in zip(cases, answers):
+        tally.check(data, answer, f"probe {label}")
+    return tally
 
 
 class WsItem:
@@ -2858,6 +2955,7 @@ def main():
     areas = run_areas(args.seed, args.area_count)
     mut = run_mutations()
     scapy = run_scapy()
+    probes = run_probes()
     malf = run_malformed()
 
     parts = [
@@ -2875,6 +2973,8 @@ def main():
          " byte flip, two targeted changes", mut),
         (f"packets built by Scapy {scapy.version}, from"
          f" tests/{SCAPY_FIXTURE.name}", scapy),
+        ("options built by hand at the edges of the harness's account"
+         " of Wireshark's checks (WS_PROBES), each in a DISCOVER", probes),
         ("malformed request lines, answered error", malf),
     ]
     ws = run_wireshark(parts, args.require_wireshark)

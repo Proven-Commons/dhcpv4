@@ -279,7 +279,7 @@ more inputs (see The tests).
 ## The tests
 
 `tests/run_tests.py` checks the tool against these rules on
-4,104 inputs (seed 20261026) and writes the outcome to
+4,196 inputs (seed 20261026) and writes the outcome to
 `tests/TEST-RESULTS.md`. The committed record has 0
 failures. Its oracles:
 
@@ -289,7 +289,7 @@ failures. Its oracles:
 - Scapy 2.8.0 built ten of the messages with its BOOTP and
   DHCP layers; they are stored in `tests/scapy-packets.txt`.
 - Wireshark's DHCP/BOOTP dissector, TShark 4.2.2, reads all
-  4,090 messages among the inputs, the ones the tool takes
+  4,182 messages among the inputs, the ones the tool takes
   and the ones it turns away, each written by the harness as
   the UDP payload of an Ethernet/IPv4/UDP frame in a pcap
   file. For a message the tool takes, Wireshark must show
@@ -298,20 +298,23 @@ failures. Its oracles:
   reads them; for every message, each Malformed Packet and
   expert error must be one the harness finds in the bytes
   by following Wireshark 4.2.2's own checks, and the other
-  way round, in every option. A fault Wireshark reports in
-  one of the few vendor readers the harness does not follow
-  (listed in the results file) is a failure too. Where
-  Wireshark reads a message differently from these rules on
-  purpose, the difference is a named one, counted only when
-  the harness finds its reason in the message. Wireshark
-  agrees on 2,056 messages: 635 the tool takes, and 1,421
-  the tool turns away where Wireshark stops with an
-  exception at the same rule or finds no payload.
-  The other 2,034 differ only under named differences, with
+  way round, in every option. Among the messages are 92
+  probes, each a DISCOVER with option 53 and one or two
+  options built by hand at the edges of those checks
+  (`WS_PROBES` in `tests/run_tests.py`). A fault Wireshark
+  reports in one of the few vendor readers the harness does
+  not follow (listed in the results file) is a failure too.
+  Where Wireshark reads a message differently from these
+  rules on purpose, the difference is a named one, counted
+  only when the harness finds its reason in the message.
+  Wireshark agrees on 2,094 messages: 673 the tool takes,
+  and 1,421 the tool turns away where Wireshark stops with
+  an exception at the same rule or finds no payload.
+  The other 2,088 differ only under named differences, with
   these counts (a message can fall under more than one):
   no end byte (no-end) 527; option 52 overload (overload)
   105; an option other than 53 whose value fails Wireshark's
-  check for it (option-value) 1,056; hlen 0 (hlen-0) 128;
+  check for it (option-value) 1,110; hlen 0 (hlen-0) 128;
   secs that look little endian (secs-le) 5; op not 1 or 2
   (op) 392; hlen above 16 (hlen) 375; no cookie, read as
   plain BOOTP (no-cookie) 371; nonzero bytes after the end
