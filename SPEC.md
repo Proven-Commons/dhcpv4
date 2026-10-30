@@ -298,12 +298,15 @@ failures. Its oracles:
   reads them; for every message, each Malformed Packet and
   expert error must be one the harness finds in the bytes
   by following Wireshark 4.2.2's own checks, and the other
-  way round. Where Wireshark reads a message differently
-  from these rules on purpose, the difference is a named
-  one, counted only when the harness finds its reason in the
-  message. Wireshark agrees on 2,056 messages: 635 the tool
-  takes, and 1,421 the tool turns away where Wireshark stops
-  with an exception at the same rule or finds no payload.
+  way round, in every option. A fault Wireshark reports in
+  one of the few vendor readers the harness does not follow
+  (listed in the results file) is a failure too. Where
+  Wireshark reads a message differently from these rules on
+  purpose, the difference is a named one, counted only when
+  the harness finds its reason in the message. Wireshark
+  agrees on 2,056 messages: 635 the tool takes, and 1,421
+  the tool turns away where Wireshark stops with an
+  exception at the same rule or finds no payload.
   The other 2,034 differ only under named differences, with
   these counts (a message can fall under more than one):
   no end byte (no-end) 527; option 52 overload (overload)

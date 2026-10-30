@@ -91,12 +91,17 @@ reports, it finds the same fault by following the checks
 of Wireshark 4.2.2's dissector, which it carries as
 `WsModel` in `tests/run_tests.py`, written from that
 dissector's source code; a fault that either side finds
-and the other does not is a failure, except in the one
-option whose checks the model follows only in part (122,
-listed in the results file). A message the tool turns away
-agrees with Wireshark only when Wireshark stops with an
-exception at the rule the tool turns it away for. Any other
-difference is a failure.
+and the other does not is a failure, in every option. The
+model does not follow a few readers Wireshark keeps for
+particular vendors (option 43 under some vendor classes,
+PacketCable capabilities in option 60, CableLabs blocks
+(enterprise 4491) in options 82 and 125, and enterprise
+3561 blocks in option 125, listed in the results file); a
+fault Wireshark reports in one of them is a failure too,
+and the failure names the reader. A message the tool turns
+away agrees with Wireshark only when Wireshark stops with
+an exception at the rule the tool turns it away for. Any
+other difference is a failure.
 
 The committed record was made with TShark 4.2.2 on the
 4,090 messages of the run with seed 20261026 (the other 14
@@ -118,7 +123,7 @@ failures:
 | overload | 105 | option 52: Wireshark hides sname or file, or reads them as options |
 | option-value | 1,056 | an option other than 53 whose value fails the check Wireshark applies to that option; `SPEC.md` does not read it |
 | hlen-0 | 128 | hlen 0: Wireshark shows no hardware address |
-| secs-le | 5 | secs that look little endian: Wireshark shows them swapped |
+| secs-le | 5 | secs that look little endian: Wireshark shows them swapped, and the tool's secs, swapped, must be what it shows |
 | op | 392 | op not 1 or 2: Wireshark reports no error |
 | hlen | 375 | hlen above 16: Wireshark reports no error, or stops reading a request's hlen bytes |
 | no-cookie | 371 | no cookie: Wireshark reads plain BOOTP |

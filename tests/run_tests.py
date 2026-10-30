@@ -71,13 +71,13 @@ Five parts.
    and get_dns_name in packet-dns.c, at tag v4.2.2). Each
    Malformed Packet must be one the model finds, at the same
    option, and each expert error one the model finds in the
-   same option, and the other way round, except for the
-   options the model follows only in part (WS_PARTIAL). For a
-   message the tool turns away, each rule it breaks that
-   Wireshark's dissection reaches must show in Wireshark's
-   own reading too. Every other difference is a failure. The
-   record lists the named differences this run found, each
-   with its count, and what the harness found under each.
+   same option, and the other way round, in every option.
+   For a message the tool turns away, each rule it breaks
+   that Wireshark's dissection reaches must show in
+   Wireshark's own reading too. Every other difference is a
+   failure. The record lists the named differences this run
+   found, each with its count, and what the harness found
+   under each.
    The part runs when tshark is on PATH; without it the
    record says the part did not run, and
    `--require-wireshark` makes that a failure.
@@ -119,6 +119,7 @@ import json
 import os
 import platform
 import random
+import re
 import shutil
 import struct
 import subprocess
@@ -1002,8 +1003,7 @@ def run_malformed():
 # the message's bytes alone. It gives each difference its reason; it is
 # not trusted on its own. A fault Wireshark reports that the model does
 # not find in the message is a failure, and so is a fault the model
-# finds that Wireshark does not report, unless the option is one whose
-# checks the model does not follow in full (WS_PARTIAL).
+# finds that Wireshark does not report.
 
 WS_BATCH = 500
 # Ethernet (14 bytes), IPv4 (20) and UDP (8) come before the message
@@ -1080,7 +1080,9 @@ WS_NAMED = {
         " Wireshark takes the field for a little endian value, shows"
         " the bytes swapped, and adds the note Seconds elapsed appears"
         " to be encoded as little-endian; SPEC.md reads secs big"
-        " endian, as RFC 2131 lays the field out"),
+        " endian, as RFC 2131 lays the field out, and the tool's secs"
+        " with its two bytes swapped must be the value Wireshark"
+        " shows"),
     "op": (
         "op is not 1 or 2: Wireshark shows the value and reports no"
         " error; SPEC.md turns the message away (The fixed fields)"),
@@ -1295,7 +1297,6 @@ WS_O63 = {1: ("is", 0, "a flag"), 2: ("is", 0, "a flag"),
           11: ("is", 4, "an IPv4 address")}
 WS_O82 = {4: ("is", 4, "a 32 bit number"), 5: ("is", 4, "an IPv4 address"),
           10: ("is", 1, "a byte"), 11: ("is", 4, "an IPv4 address"),
-          13: ("is", 2, "an access technology type"),
           19: ("is", 2, "a 16 bit number"),
           150: ("is", 4, "an IPv4 address"),
           152: ("is", 4, "an IPv4 address")}
@@ -1387,6 +1388,12 @@ def ws_rule_82(v, m):
         fault = WS_O82.get(sub) and ws_length(WS_O82[sub], ln)
         if fault:
             m.error(f"sub-option {sub}: {fault}")
+        if sub == 13 and ln == 0:
+            # o82_opt gives 13 the type bytes, so the length check in
+            # its own case never runs; its field is a one byte number,
+            # read here from 0 bytes (_ws.type_length.mismatch).
+            m.error("sub-option 13: a number read from 0 bytes")
+            raise WsStop("sub-option 13: a number read from 0 bytes")
         if sub == 16 and ln < 6:
             # A MAC address field read from fewer than 6 bytes.
             m.error("sub-option 16: a MAC address shorter than 6 bytes")
@@ -1398,6 +1405,64 @@ def ws_rule_82(v, m):
             ws_need(v, so + 5 + v[so + 4], "a vendor block runs past the value")
             so += 5 + v[so + 4]
         off = end
+
+
+# Option 43 goes to the first of Wireshark's vendor-specific information
+# readers (heuristic dissectors) that takes it. All but one take it by
+# the vendor class (option 60) the first pass found, and are tried
+# first; the model does not follow them. The last, Alcatel-Lucent's,
+# takes it by its own bytes.
+WS_VENDOR_CLASSES = (b"cisco", b"AEROHIVE", b"AAPLBSDPC", b"ArubaInstantAP",
+                     b"ArubaAP", b"pktc", b"docsis", b"OpenCable2.0",
+                     b"CableHome", b"RPD", b"RMD", b"ECM", b"PTA", b"DEMARC",
+                     b"TR", b"SROUTER", b"PXEClient")
+
+
+def ws_rule_43(v, m):
+    # Vendor-specific information (RFC 2132 section 8.4).
+    vc = m.vendor_class
+    if vc is not None and vc.split(b"\0")[0].startswith(WS_VENDOR_CLASSES):
+        return m.unfollowed("option 43 read for a vendor class (option 60)"
+                            " Wireshark has its own reader for")
+    if not v or v[0] not in (58, 64, 65, 66, 67):
+        return
+    # test_encapsulated_vendor_options: every sub-option fits, up to an
+    # end byte (255); pad bytes (0) have no length byte.
+    off = 0
+    while off < len(v) and v[off] != 255:
+        if v[off] == 0:
+            off += 1
+            continue
+        if off + 1 >= len(v) or off + 2 + v[off + 1] > len(v):
+            return
+        off += 2 + v[off + 1]
+    # Alcatel-Lucent's sub-options: the first one with an unknown code
+    # or the wrong length draws an error and ends the option.
+    sizes = {58: 2, 64: 4, 65: 4, 66: 1}
+    off = 0
+    while off < len(v) and v[off] != 255:
+        sub = v[off]
+        if sub == 0:
+            off += 1
+            continue
+        if sub not in sizes and sub != 67:
+            return m.error(f"Alcatel-Lucent sub-option {sub}: a code"
+                           f" Wireshark does not know")
+        if sub in sizes and v[off + 1] != sizes[sub]:
+            return m.error(f"Alcatel-Lucent sub-option {sub}: length other"
+                           f" than {sizes[sub]}")
+        off += 2 + v[off + 1]
+
+
+WS_PACKETCABLE = (b"pktc1.0:", b"pktc1.5:", b"pktc2.0:", b"docsis1.1:",
+                  b"docsis2.0:", b"docsis3.0:")
+
+
+def ws_rule_60(v, m):
+    # Vendor class identifier: text, and PacketCable capabilities after
+    # some vendor classes, which the model does not follow.
+    if v.startswith(WS_PACKETCABLE):
+        m.unfollowed("the PacketCable capabilities in option 60")
 
 
 def ws_rule_83(v, m):
@@ -1465,15 +1530,72 @@ def ws_rule_121(v, m):
 
 
 def ws_rule_122(v, m):
-    # CableLabs client configuration (RFC 3495): followed only as far as
-    # its sub-option lengths (WS_PARTIAL).
-    off = 0
-    while off < len(v):
-        if off + 1 >= len(v):
+    # CableLabs client configuration (RFC 3495), as
+    # dissect_packetcable_ietf_ccc reads it under its default
+    # preference (RFC 3495). Each sub-option is a code byte and a length
+    # byte; what comes next depends on the code, and where the next
+    # sub-option starts too. A check that fails ends the option with an
+    # expert error (dhcp.missing_subopt_length or
+    # dhcp.missing_subopt_value). It does not check a sub-option's
+    # length against the value: where a code has no check, a read past
+    # the value stops it with an exception, and a sub-option that runs
+    # past the value ends the option.
+    n, off = len(v), 0
+    while off < n:
+        code = v[off]
+        if off + 1 >= n:
             return m.error("a sub-option with no length byte")
-        if off + 2 + v[off + 1] > len(v):
-            return m.error("a sub-option runs past the value")
-        off += 2 + v[off + 1]
+        ln, at = v[off + 1], off + 2
+        if code in (1, 2):
+            # Primary and secondary DHCP server: an IPv4 address.
+            if at + 4 > n:
+                return m.error(f"sub-option {code}: fewer than 4 value"
+                               f" bytes left")
+            off = at + ln
+        elif code == 3:
+            # Provisioning server: a type byte, then a domain name (0)
+            # or an IPv4 address (1). It moves on by the length less 1,
+            # from after the type byte.
+            if at + 1 > n:
+                return m.error("sub-option 3: no type byte left")
+            kind, at = v[at], at + 1
+            if kind == 0:
+                ws_dns_name(v, at, ln, at)
+            elif kind == 1 and at + 4 > n:
+                return m.error("sub-option 3: fewer than 4 address bytes"
+                               " left")
+            off = at + ln - 1
+        elif code == 4:
+            # AS-REQ/AS-REP backoff and retry: 12 bytes.
+            if at + 12 > n:
+                return m.error("sub-option 4: fewer than 12 value bytes"
+                               " left")
+            off = at + ln
+        elif code == 5:
+            # AP-REQ/AP-REP backoff and retry: read only at length 12,
+            # with no check first.
+            if ln == 12:
+                ws_need(v, at + 12, "sub-option 5: its 12 bytes run past"
+                                    " the value")
+            off = at + ln
+        elif code == 6:
+            # Kerberos realm: a domain name.
+            ws_dns_name(v, at, ln, at)
+            off = at + ln
+        elif code in (7, 8):
+            # Ticket control and provisioning timer: one byte, whatever
+            # the length byte says.
+            if at + 1 > n:
+                return m.error(f"sub-option {code}: no value byte left")
+            off = at + 1
+        elif code == 9:
+            # Security ticket control: 2 bytes.
+            if at + 2 > n:
+                return m.error("sub-option 9: fewer than 2 value bytes"
+                               " left")
+            off = at + ln
+        else:
+            off = at + ln
 
 
 def ws_rule_123(v, m):
@@ -1582,9 +1704,21 @@ def ws_rule_242(v, m):
     # pairs split at commas.
     if len(v) < 5:
         return m.error("length below 5")
+    # It reads the value as ASCII text (ENC_ASCII): a byte above 0x7F
+    # becomes U+FFFD, and the text ends at the first zero byte.
+    text = "".join(chr(b) if b < 0x80 else "�"
+                   for b in v.split(b"\0")[0])
+    # wmem_strsplit gives no fields at all for empty text, so a value
+    # that starts with a zero byte draws no error.
+    if not text:
+        return
 
     def number(s):
-        return s.lstrip("-").isdigit() and -2**31 <= int(s) < 2**31
+        # ws_strtoi32 (wsutil/strtoi.c): g_ascii_strtoll in base 10
+        # (leading ASCII white space, a sign, digits) over the whole
+        # text, and a value that fits in 32 bits.
+        hit = re.fullmatch(r"[ \t\n\v\f\r]*([+-]?[0-9]+)", s)
+        return bool(hit) and -2**31 <= int(hit.group(1)) < 2**31
 
     def check(p):
         known = [k for k in WS_AVAYA if p.startswith(k) and len(p) > len(k)]
@@ -1594,10 +1728,10 @@ def ws_rule_242(v, m):
         elif known[-1] == "L2QVLAN=" and number(p[8:]):
             m.error("an L2QVLAN value")
         elif known[-1] == "VLANTEST=" and not number(p[9:]):
-            m.error("a VLANTEST value that is not a number")
+            m.error("a VLANTEST value that is not a 32 bit number")
 
     param = ""
-    for field in v.split(b"\0")[0].decode("latin-1").split(","):
+    for field in text.split(","):
         if "=" in field:
             if param:
                 check(param)
@@ -1610,9 +1744,23 @@ def ws_rule_242(v, m):
         check(param)
 
 
+# The readers inside the dissector that the model does not follow (the
+# rules above mark an option that reaches one: WsModel.unfollowed).
+WS_UNFOLLOWED = (
+    "option 43 when the vendor class (option 60) starts with "
+    + ", ".join(c.decode() for c in WS_VENDOR_CLASSES[:-1])
+    + f" or {WS_VENDOR_CLASSES[-1].decode()}",
+    "option 60 when it starts with " + ", ".join(
+        c.decode() for c in WS_PACKETCABLE[:-1])
+    + f" or {WS_PACKETCABLE[-1].decode()} (PacketCable capabilities)",
+    "option 82 sub-option 9, from a CableLabs vendor block"
+    " (enterprise 4491) on",
+    "option 125, from a block for enterprise 3561 or 4491 on",
+)
+
 WS_RULES = {
-    61: ws_rule_61, 63: ws_rule_63, 77: ws_rule_77, 78: ws_rule_78,
-    81: ws_rule_81, 82: ws_rule_82, 83: ws_rule_83, 90: ws_rule_90,
+    43: ws_rule_43, 60: ws_rule_60, 61: ws_rule_61, 63: ws_rule_63,
+    77: ws_rule_77, 78: ws_rule_78, 81: ws_rule_81, 82: ws_rule_82, 83: ws_rule_83, 90: ws_rule_90,
     94: ws_rule_94, 99: ws_rule_99, 117: ws_rule_117, 121: ws_rule_121,
     122: ws_rule_122, 123: ws_rule_123, 124: ws_rule_124,
     125: ws_rule_125, 146: ws_rule_146, 158: ws_rule_158,
@@ -1620,12 +1768,6 @@ WS_RULES = {
     79: lambda v, m: ws_need(v, 1, "length 0"),
     151: lambda v, m: None if v else m.error("length 0"),
 }
-# The options whose checks the model follows only in part. A fault
-# Wireshark reports in one of them is still a failure unless the model
-# finds one there too; one the model finds that Wireshark does not
-# report is not.
-WS_PARTIAL = {122: "the CableLabs client configuration sub-options,"
-                   " followed only as far as their lengths"}
 
 
 class WsItem:
@@ -1678,6 +1820,7 @@ class WsModel:
         self.fields = False      # the fixed fields are shown
         self.dhcp_type = None    # the type byte the first pass found
         self.overload = 0        # the overload byte the first pass found
+        self.vendor_class = None  # the option 60 value the first pass found
         self.items = []          # every item, in the order shown
         self.top = []            # the items of the options field
         self.end = None          # offset of the end option there
@@ -1746,6 +1889,8 @@ class WsModel:
                     self.overload = data[off + 2]
                 elif c == 53:
                     self.dhcp_type = data[off + 2]
+                elif c == 60:
+                    self.vendor_class = bytes(data[off + 2:off + 2 + ln])
                 elif c in blocks:
                     blocks[c] += 1
             off += 2 + ln
@@ -2241,15 +2386,15 @@ def ws_faults(model, ws, out):
                          f" {at}, which the model does not find in the"
                          f" message{unknown(at)}")
     elif stop is not None and not ws.malformed:
-        if stop[0] is None or stop[0].top().code not in WS_PARTIAL:
-            out.fails.append(f"the model finds an exception ({stop[2]})"
-                             f" Wireshark does not raise")
+        out.fails.append(f"the model finds an exception ({stop[2]})"
+                         f" Wireshark does not raise")
     elif stop is not None:
         mine = (stop[0].offset, stop[0].code) if stop[0] else None
         theirs = (last.offset, last.code) if last else None
         if mine != theirs:
             out.fails.append(f"Wireshark stops after the item {theirs},"
-                             f" the model after {mine}")
+                             f" the model after {mine}"
+                             f"{unknown(last.offset if last else None)}")
         else:
             out.name(stop[1], ws_why(stop[0] if stop[3] else None, stop[2]))
     # The expert errors, item by item.
@@ -2263,17 +2408,15 @@ def ws_faults(model, ws, out):
     reached = {it.offset for it in ws.all} | {None}
     for at in sorted(set(mine) | set(theirs), key=lambda x: -1 if x is None else x):
         got, want = theirs.get(at, []), mine.get(at, [])
-        item = items.get(at)
-        partial = item is not None and item.top().code in WS_PARTIAL
         if got and not want:
             out.fails += [f"Wireshark: {m} ({k}) in the item at {at}, a"
                           f" fault the model does not find in the"
                           f" message{unknown(at)}" for k, m in got]
-        elif want and not got and at in reached and not partial:
+        elif want and not got and at in reached:
             out.fails += [f"the model finds {w} in the item at {at},"
                           f" Wireshark reports no error there"
                           for _, _, w in want]
-        elif got and len(got) != len(want) and not partial:
+        elif got and len(got) != len(want):
             out.fails.append(f"in the item at {at}: Wireshark reports"
                              f" {len(got)} errors, the model finds {len(want)}")
         elif got:
@@ -2332,7 +2475,13 @@ def ws_taken(data, tool, model, ws):
                                  f" the tool {want.hex()[:40]}")
         elif (name == "secs" and data[8] and not data[9]
               and value == data[8] and "dhcp.secs_le" in ws.notes):
-            out.name("secs-le")
+            # Wireshark shows the two bytes swapped: the tool's secs,
+            # swapped, must be what it shows.
+            if ((want & 0xFF) << 8 | want >> 8) == value:
+                out.name("secs-le")
+            else:
+                out.fails.append(f"secs: Wireshark {shown} (the bytes"
+                                 f" swapped), the tool {want!r}")
         elif value != want:
             out.fails.append(f"{name}: Wireshark {shown}, the tool {want!r}")
     # chaddr: the address Wireshark shows, then its padding.
@@ -2603,10 +2752,11 @@ def wireshark_record(ws):
         " option, the same number of errors in the same option. A fault"
         " Wireshark reports that the harness does not find is a"
         " failure, and so is one the harness finds that Wireshark does"
-        " not report, except in the options whose checks it does not"
-        " follow in full ("
-        + ", ".join(f"{c}, {w}" for c, w in sorted(WS_PARTIAL.items()))
-        + ").",
+        " not report. The harness does not follow these readers"
+        " Wireshark keeps for particular vendors: "
+        + "; ".join(WS_UNFOLLOWED)
+        + ". A fault Wireshark reports in one of them is a failure"
+        " too, and the failure names the reader.",
         "",
         "| part | messages | agreed | named differences | failures |",
         "| --- | --- | --- | --- | --- |",
