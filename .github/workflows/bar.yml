@@ -1,0 +1,21 @@
+name: verified bar
+
+on:
+  push:
+  pull_request:
+  # Rerun when the spec reviewer approves, or an approval is dismissed.
+  pull_request_review:
+    types: [submitted, dismissed]
+
+jobs:
+  bar:
+    # pull-requests: read lets the check confirm the spec approval on GitHub.
+    permissions:
+      contents: read
+      pull-requests: read
+    # Both lines pin the same commit of Proven-Commons/mission: bar v2, as
+    # proposed in its pull request #2. Move both to a release tag once
+    # mission publishes one.
+    uses: Proven-Commons/mission/.github/workflows/verified-bar.yml@6ba85c27abaaf07905c9316aa96dc29f7b5847a2
+    with:
+      bar-ref: 6ba85c27abaaf07905c9316aa96dc29f7b5847a2

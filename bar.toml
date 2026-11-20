@@ -1,0 +1,52 @@
+# Read by bar/check.py in Proven-Commons/mission.
+# See playbook/verified-bar.md there for what each field means.
+
+[project]
+name = "dhcpv4"
+# "in-progress" until every bar item passes, then "verified".
+status = "in-progress"
+page = "README.md"
+# GitHub handles of everyone who wrote the specification.
+spec_authors = ["abu-aska", "zero-aska"]
+# The program people run. A change to it voids the approval.
+entry_points = ["Main.lean"]
+
+[spec]
+files = ["SPEC.md", "Spec.lean", "Spec/Defs.lean"]
+# The code under proof: the functions the statements are about.
+# The grammar OptionArea, the canonical option area canonArea,
+# the rules FixedRules and TypeRule, and WF and its parts only
+# give the statements their meaning, so they are in
+# Spec/Defs.lean above, not here.
+code = [
+  # The data types the statements are about, the fields of the
+  # two structures, which WF in Spec/Defs.lean reads, and the
+  # message constructor, which parse_accepts_iff is stated with.
+  "Dhcp.DhcpOption", "Dhcp.Fixed", "Dhcp.Message",
+  "Dhcp.Message.mk", "Dhcp.Message.fixed", "Dhcp.Message.options",
+  "Dhcp.Fixed.op", "Dhcp.Fixed.htype", "Dhcp.Fixed.hlen",
+  "Dhcp.Fixed.hops", "Dhcp.Fixed.xid", "Dhcp.Fixed.secs",
+  "Dhcp.Fixed.flags", "Dhcp.Fixed.ciaddr", "Dhcp.Fixed.yiaddr",
+  "Dhcp.Fixed.siaddr", "Dhcp.Fixed.giaddr", "Dhcp.Fixed.chaddr",
+  "Dhcp.Fixed.sname", "Dhcp.Fixed.file",
+  # The byte forms and the printer.
+  "Dhcp.be16", "Dhcp.u16", "Dhcp.be32", "Dhcp.u32",
+  "Dhcp.cookie", "Dhcp.printFixed", "Dhcp.printOptions",
+  "Dhcp.print",
+  # The length checked readers and the parser.
+  "Dhcp.withU8", "Dhcp.withU16", "Dhcp.withU32", "Dhcp.withBytes",
+  "Dhcp.withCookie", "Dhcp.parseFixed", "Dhcp.parseOptionsGo",
+  "Dhcp.parseOptions", "Dhcp.check53", "Dhcp.parse",
+]
+
+# One entry per approval, added in a pull request the reviewer approves.
+# [[spec.approval]]
+# reviewer = "github-handle"
+# date = "2026-11-02"
+# sha256 = "..."
+# record = "https://github.com/Proven-Commons/dhcpv4/pull/<n>"
+
+[tests]
+results = "tests/TEST-RESULTS.md"
+command = "python3 tests/run_tests.py"
+files = ["tests/run_tests.py", "tests/scapy-packets.txt"]
